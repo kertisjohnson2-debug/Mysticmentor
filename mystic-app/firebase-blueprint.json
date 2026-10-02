@@ -1,0 +1,273 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account profile details including secure role information, virtual wallet balances, and clout points.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "enum": ["member", "admin"]
+        },
+        "gemBalance": {
+          "type": "integer"
+        },
+        "cloutPoints": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "role", "gemBalance", "cloutPoints", "createdAt", "updatedAt"]
+    },
+    "Reading": {
+      "title": "Reading",
+      "description": "A saved interactive Tarot reading drawn by a guest or registered member.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "cards": {
+          "type": "array"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "date", "topic", "cards", "summary", "createdAt"]
+    },
+    "TarotCard": {
+      "title": "TarotCard",
+      "description": "Detailed properties of a single tarot card in the 78-card registry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "number": {
+          "type": "string"
+        },
+        "iconName": {
+          "type": "string"
+        },
+        "uprightKeywords": {
+          "type": "array"
+        },
+        "reversedKeywords": {
+          "type": "array"
+        },
+        "uprightMeaning": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "reversedMeaning": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "advice": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "isHidden": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "name", "number", "iconName", "uprightKeywords", "reversedKeywords", "uprightMeaning", "reversedMeaning", "description", "advice"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Global settings for drawing tarot, smart shuffle, and lockout protection limits.",
+      "type": "object",
+      "properties": {
+        "allowReversed": {
+          "type": "boolean"
+        },
+        "smartShuffleEnabled": {
+          "type": "boolean"
+        },
+        "repeatProtectionLimit": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["allowReversed", "smartShuffleEnabled", "repeatProtectionLimit", "updatedAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Ledger of virtual gem adjustments, such as recharges or virtual gift spending.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["recharge", "spend_gift", "tip"]
+        },
+        "gemsAmount": {
+          "type": "integer"
+        },
+        "giftId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "type", "gemsAmount", "description", "createdAt"]
+    },
+    "Gift": {
+      "title": "Gift",
+      "description": "Virtual animated gifts definitions such as butterflies, rose, or crowns.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "cost": {
+          "type": "integer"
+        },
+        "cloutReward": {
+          "type": "integer"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "cost", "cloutReward", "icon", "color"]
+    },
+    "FinancialRecord": {
+      "title": "FinancialRecord",
+      "description": "Secure read-only global financial ledger record for administrative auditing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["gem_purchase", "tip", "refund", "dispute"]
+        },
+        "userId": {
+          "type": "string"
+        },
+        "gemsAmount": {
+          "type": "integer"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "platformFee": {
+          "type": "number"
+        },
+        "recipientShare": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "type", "amount", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profile collection."
+    },
+    "users/{userId}/readings/{readingId}": {
+      "schema": "Reading",
+      "description": "Individual member private tarot reading history."
+    },
+    "users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Isolated virtual ledger records for verification auditing."
+    },
+    "tarot_deck/{cardId}": {
+      "schema": "TarotCard",
+      "description": "The master 78 tarot cards database."
+    },
+    "gifts_catalog/{giftId}": {
+      "schema": "Gift",
+      "description": "Defines available virtual audience gifts."
+    },
+    "admin_settings/global": {
+      "schema": "AdminSettings",
+      "description": "The singleton configuration document for oracle drawing and smart shuffle rules."
+    },
+    "financial_records/{recordId}": {
+      "schema": "FinancialRecord",
+      "description": "The secure master global financial auditing ledger."
+    }
+  }
+}

@@ -1,0 +1,314 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Cinzel", serif;
+  --font-body: "Plus Jakarta Sans", sans-serif;
+  
+  --color-cosmic-dark: #070412;
+  --color-cosmic-purple: #1a0f30;
+  --color-cosmic-indigo: #2c1654;
+  --color-mystic-gold: #f3c65f;
+  --color-mystic-gold-dark: #b8860b;
+  --color-mystic-teal: #14b8a6;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-body);
+    background-color: var(--color-cosmic-dark);
+    color: #f1f5f9;
+    -webkit-tap-highlight-color: transparent;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom Mystical Animations */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+@keyframes float-orb-gold {
+  0%, 100% { transform: translate(0px, 0px) scale(1.0); opacity: 0.65; }
+  50% { transform: translate(25px, -35px) scale(1.1); opacity: 0.9; }
+}
+
+@keyframes float-orb-purple {
+  0%, 100% { transform: translate(0px, 0px) scale(1.0); opacity: 0.7; }
+  50% { transform: translate(-30px, 25px) scale(0.95); opacity: 0.95; }
+}
+
+@keyframes float-orb-indigo {
+  0%, 100% { transform: translate(0px, 0px) scale(1.0); opacity: 0.75; }
+  50% { transform: translate(20px, 30px) scale(1.15); opacity: 0.95; }
+}
+
+@keyframes float-card {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-10px) rotate(1deg); }
+}
+
+@keyframes gold-glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(243, 198, 95, 0.25); }
+  50% { box-shadow: 0 0 28px rgba(243, 198, 95, 0.6); }
+}
+
+@keyframes text-pulse {
+  0%, 100% { text-shadow: 0 0 5px rgba(243, 198, 95, 0.4); }
+  50% { text-shadow: 0 0 15px rgba(243, 198, 95, 0.75); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.03); }
+}
+
+@keyframes nebula-drift {
+  0% {
+    background-position: 0% 0%, 0% 0%, 0% 0%, 0 0, 50px 50px;
+    filter: hue-rotate(0deg);
+  }
+  50% {
+    background-position: 10% -10%, -15% 15%, 5% 5%, 10px -10px, 40px 60px;
+  }
+  100% {
+    background-position: -5% 10%, 10% -10%, -10% -5%, -15px 15px, 60px 40px;
+    filter: hue-rotate(12deg);
+  }
+}
+
+@keyframes celestial-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes shooting-star {
+  0% { transform: translate(300px, -300px) rotate(-45deg) scale(0); opacity: 0; }
+  2% { opacity: 1; transform: translate(300px, -300px) rotate(-45deg) scale(1.0); }
+  12% { transform: translate(-300px, 300px) rotate(-45deg) scale(1.0); opacity: 0; }
+  100% { transform: translate(-300px, 300px) rotate(-45deg) scale(0); opacity: 0; }
+}
+
+.animate-twinkle {
+  animation: twinkle 4s ease-in-out infinite;
+}
+
+.animate-float-orb-gold {
+  animation: float-orb-gold 14s ease-in-out infinite;
+}
+
+.animate-float-orb-purple {
+  animation: float-orb-purple 18s ease-in-out infinite;
+}
+
+.animate-float-orb-indigo {
+  animation: float-orb-indigo 16s ease-in-out infinite;
+}
+
+.animate-float-card {
+  animation: float-card 6s ease-in-out infinite;
+}
+
+.animate-gold-glow {
+  animation: gold-glow 4s ease-in-out infinite;
+}
+
+.animate-text-pulse {
+  animation: text-pulse 3s ease-in-out infinite;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2.5s ease-in-out infinite;
+}
+
+.celestial-ring {
+  animation: celestial-spin 120s linear infinite;
+  transform-origin: center center;
+}
+
+.shooting-star-1 {
+  animation: shooting-star 14s ease-in-out infinite;
+}
+
+.shooting-star-2 {
+  animation: shooting-star 20s ease-in-out infinite;
+  animation-delay: 6s;
+}
+
+/* Clearly visible softly glowing spheres in varied sizes, gradients, halos, highlights */
+.cosmic-glowing-orb-gold {
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #f3c65f 30%, rgba(243, 198, 95, 0.4) 65%, transparent 100%);
+  box-shadow: 0 0 35px rgba(243, 198, 95, 0.55), inset 0 0 10px rgba(255, 255, 255, 0.6);
+  filter: blur(4px);
+}
+
+.cosmic-glowing-orb-purple {
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #a855f7 30%, rgba(168, 85, 247, 0.35) 65%, transparent 100%);
+  box-shadow: 0 0 40px rgba(168, 85, 247, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.6);
+  filter: blur(5px);
+}
+
+.cosmic-glowing-orb-indigo {
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #3b82f6 30%, rgba(59, 130, 246, 0.35) 65%, transparent 100%);
+  box-shadow: 0 0 40px rgba(59, 130, 246, 0.55), inset 0 0 12px rgba(255, 255, 255, 0.6);
+  filter: blur(6px);
+}
+
+/* Rotating Celestial Astrological Ring layout container behind the content */
+.cosmic-ring-container {
+  position: absolute;
+  top: 35%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 21rem;
+  height: 21rem;
+  pointer-events: none;
+  opacity: 0.28;
+  user-select: none;
+  z-index: 0;
+  filter: drop-shadow(0 0 12px rgba(243, 198, 95, 0.5));
+}
+
+/* Card Active Tap Ripple & Golden Glow Shockwave */
+.card-active-ripple {
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+/* Golden Ripple on tap */
+.card-active-ripple:active .ripple-wave-element {
+  animation: gold-ripple-expand 0.6s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+}
+
+@keyframes gold-ripple-expand {
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(243, 198, 95, 0.9), 0 0 0 0 rgba(243, 198, 95, 0.9);
+    background: rgba(243, 198, 95, 0.35);
+    opacity: 1;
+  }
+  100% {
+    box-shadow: inset 0 0 40px 10px rgba(243, 198, 95, 0), 0 0 60px 30px rgba(243, 198, 95, 0);
+    background: rgba(243, 198, 95, 0);
+    opacity: 0;
+  }
+}
+
+/* Cosmic Sparkle Particles burst on tap */
+.cosmic-sparkle {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background-color: #f3c65f;
+  border-radius: 50%;
+  opacity: 0;
+  box-shadow: 0 0 8px #fff, 0 0 12px #f3c65f;
+  pointer-events: none;
+  top: 50%;
+  left: 50%;
+}
+
+.card-active-ripple:active .cosmic-sparkle {
+  animation: sparkle-burst 0.75s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+}
+
+/* Offset directions for the sparkles to expand in a radial burst */
+.cosmic-sparkle.s-1 { --tx: -55px;  --ty: -65px;  animation-delay: 0s; }
+.cosmic-sparkle.s-2 { --tx: 65px;   --ty: -45px;  animation-delay: 0.04s; }
+.cosmic-sparkle.s-3 { --tx: -70px;  --ty: 35px;   animation-delay: 0.02s; }
+.cosmic-sparkle.s-4 { --tx: 55px;   --ty: 55px;   animation-delay: 0.06s; }
+.cosmic-sparkle.s-5 { --tx: 0px;    --ty: -75px;  animation-delay: 0.03s; }
+.cosmic-sparkle.s-6 { --tx: -40px;  --ty: 60px;   animation-delay: 0.05s; }
+
+@keyframes sparkle-burst {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 1;
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1.4);
+    opacity: 0;
+  }
+}
+
+/* Card Flipping Mechanism */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070412;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2c1654;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #f3c65f;
+}
+
+/* Breathing Moving Cosmic Nebula & Starfield */
+.cosmic-nebula-bg {
+  background-color: #070412;
+  background-image: 
+    radial-gradient(circle at 50% 20%, rgba(144, 97, 249, 0.18) 0%, transparent 50%),
+    radial-gradient(circle at 20% 70%, rgba(20, 184, 166, 0.12) 0%, transparent 45%),
+    radial-gradient(circle at 80% 40%, rgba(243, 198, 95, 0.08) 0%, transparent 40%),
+    radial-gradient(rgba(255, 255, 255, 0.2) 1px, transparent 1px),
+    radial-gradient(rgba(243, 198, 95, 0.15) 1.5px, transparent 1.5px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 300px 350px, 200px 200px;
+  background-position: 0 0, 0 0, 0 0, 0 0, 50px 50px;
+  animation: nebula-drift 16s ease-in-out infinite alternate;
+}
+
+/* Accessibility Reduced-Motion Fallback */
+@media (prefers-reduced-motion: reduce) {
+  .cosmic-nebula-bg,
+  .celestial-ring,
+  .shooting-star-1,
+  .shooting-star-2,
+  .animate-float-orb-gold,
+  .animate-float-orb-purple,
+  .animate-float-orb-indigo,
+  .animate-twinkle,
+  .animate-float-card,
+  .animate-pulse-subtle,
+  .animate-text-pulse,
+  .animate-gold-glow {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .card-active-ripple::after,
+  .ripple-wave-element,
+  .cosmic-sparkle {
+    display: none !important;
+  }
+}

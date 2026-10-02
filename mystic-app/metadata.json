@@ -1,0 +1,8 @@
+{
+  "name": "Remix CityVibe Mystics",
+  "description": "A premium, mobile-first spiritual reading, interactive tarot, and daily horoscope platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
