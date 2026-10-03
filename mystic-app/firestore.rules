@@ -28,13 +28,39 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function hasTarotPermission() {
+      return isAdmin() || (
+        isSignedIn() && request.auth.token.email_verified == true &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('tarotReader', false) == true
+      );
+    }
+
+    function isValidLiveReading(data, uid) {
+      return data.keys().hasOnly(['broadcasterUid', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'isPaused', 'spread', 'cards', 'showInterpretations', 'updatedAt']) &&
+             data.keys().hasAll(['broadcasterUid', 'name', 'avatar', 'title', 'topic', 'isPaused', 'spread', 'cards', 'showInterpretations', 'updatedAt']) &&
+             data.broadcasterUid == uid &&
+             data.name is string && data.name.size() <= 80 &&
+             data.avatar is string && data.avatar.size() <= 8 &&
+             data.title is string && data.title.size() <= 120 &&
+             data.get('description', '') is string && data.get('description', '').size() <= 200 &&
+             data.get('hashtags', '') is string && data.get('hashtags', '').size() <= 120 &&
+             data.topic is string && data.topic.size() <= 40 &&
+             data.isPaused is bool &&
+             data.spread in ['single', 'three'] &&
+             data.cards is list && data.cards.size() <= 3 &&
+             data.showInterpretations is bool &&
+             data.updatedAt is number;
+    }
+
     // --- VALIDATION HELPERS ---
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
-             data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'tarotReader', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
              data.uid == request.auth.uid &&
              data.email is string &&
              data.role in ['member', 'admin'] &&
+             data.get('tarotReader', false) is bool &&
              data.gemBalance is int && data.gemBalance >= 0 &&
              data.cloutPoints is int && data.cloutPoints >= 0;
     }
@@ -66,12 +92,13 @@ service cloud.firestore {
       allow create: if isSignedIn() && isOwner(userId) && isValidId(userId) && isValidUser(request.resource.data) && (
         // Prevent normal users from self-assigning admin roles during creation
         request.resource.data.role == "member" || (request.resource.data.role == "admin" && request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true)
-      );
+      ) && request.resource.data.get('tarotReader', false) == false;
       allow update: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data) && (
         // Standard users cannot change their own gem balances, clout points, or roles!
         request.resource.data.gemBalance == resource.data.gemBalance &&
         request.resource.data.cloutPoints == resource.data.cloutPoints &&
-        request.resource.data.role == resource.data.role
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.get('tarotReader', false) == resource.data.get('tarotReader', false)
       ) || isAdmin();
       allow delete: if isAdmin();
     }
@@ -113,6 +140,80 @@ service cloud.firestore {
     match /financial_records/{recordId} {
       allow read: if isAdmin();
       allow write: if false; // strictly write-protected from client SDKs
+    }
+
+    // Live broadcast Tarot state: only a Tarot Reader/admin may publish their own; any signed-in viewer may read
+    // Live video signaling (WebRTC offer/answer/ICE only; media never touches Firestore)
+    match /liveSessions/{sessionId} {
+      function isSessionOwner() {
+        return isSignedIn() &&
+          request.auth.token.firebase.sign_in_provider != 'anonymous' &&
+          get(/databases/$(database)/documents/liveSessions/$(sessionId)).data.ownerUid == request.auth.uid;
+      }
+
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() &&
+        request.auth.token.firebase.sign_in_provider != 'anonymous' &&
+        isValidId(sessionId) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        request.resource.data.keys().hasAll(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.sessionId == sessionId &&
+        request.resource.data.status == 'live' &&
+        request.resource.data.startedAt is number;
+      allow update: if isSessionOwner() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt']) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.sessionId == sessionId &&
+        request.resource.data.status == 'live' &&
+        request.resource.data.startedAt is number;
+      allow delete: if isSessionOwner();
+
+      match /viewers/{viewerId} {
+        allow read: if isSessionOwner() || (isSignedIn() && resource.data.viewerUid == request.auth.uid);
+        allow create: if isSignedIn() &&
+          isValidId(viewerId) &&
+          request.resource.data.keys().hasOnly(['viewerUid', 'sessionId', 'createdAt', 'offer']) &&
+          request.resource.data.keys().hasAll(['viewerUid', 'sessionId', 'createdAt', 'offer']) &&
+          request.resource.data.viewerUid == request.auth.uid &&
+          request.resource.data.sessionId == sessionId &&
+          request.resource.data.createdAt is number &&
+          request.resource.data.offer.type == 'offer' && request.resource.data.offer.sdp.size() <= 100000;
+        allow update: if (
+            isSessionOwner() &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer']) &&
+            request.resource.data.answer.type == 'answer' &&
+            request.resource.data.answer.sdp.size() <= 100000
+          ) || (
+            isSignedIn() &&
+            resource.data.viewerUid == request.auth.uid &&
+            request.resource.data.viewerUid == request.auth.uid &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offer']) &&
+            request.resource.data.offer.type == 'offer' &&
+            request.resource.data.offer.sdp.size() <= 100000
+          );
+        allow delete: if isSessionOwner() || (isSignedIn() && resource.data.viewerUid == request.auth.uid);
+
+        match /candidates/{candidateId} {
+          function isViewerOwner() {
+            return isSignedIn() &&
+              get(/databases/$(database)/documents/liveSessions/$(sessionId)/viewers/$(viewerId)).data.viewerUid == request.auth.uid;
+          }
+          allow read: if isSessionOwner() || isViewerOwner();
+          allow create: if request.resource.data.keys().hasOnly(['from', 'candidate']) &&
+            request.resource.data.keys().hasAll(['from', 'candidate']) &&
+            ((isSessionOwner() && request.resource.data.from == 'broadcaster') ||
+             (isViewerOwner() && request.resource.data.from == 'viewer'));
+          allow delete: if isSessionOwner() || isViewerOwner();
+        }
+      }
+    }
+
+    match /liveReadings/{uid} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(uid) && hasTarotPermission() && isValidLiveReading(request.resource.data, uid);
+      allow delete: if isOwner(uid) || isAdmin();
     }
 
   }
