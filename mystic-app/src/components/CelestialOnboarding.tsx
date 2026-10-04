@@ -6,6 +6,8 @@ import registerArtwork from "../assets/images/mystical_card_back_1790704964638.j
 export default function CelestialOnboarding({
   authMode,
   setAuthMode,
+  authDisplayName,
+  setAuthDisplayName,
   authEmail,
   setAuthEmail,
   authPassword,
@@ -70,6 +72,17 @@ export default function CelestialOnboarding({
         </div>
 
         <form onSubmit={handleAuthSubmit} className="space-y-3.5 pt-1 text-xs">
+          {authMode === "register" && (
+            <input
+              type="text"
+              placeholder="Chosen Name"
+              aria-label="Chosen Name"
+              value={authDisplayName}
+              onChange={(e) => setAuthDisplayName(e.target.value)}
+              className="w-full p-2.5 rounded-lg bg-[#070412] border border-white/10 text-white placeholder-slate-500"
+              required
+            />
+          )}
           <input
             type="email"
             placeholder="Email Coordinate"

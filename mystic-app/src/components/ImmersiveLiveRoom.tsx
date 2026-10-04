@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   MessageCircle,
   Pause,
   Pencil,
+  ArrowLeft,
   Play,
   RefreshCw,
   Scale,
@@ -33,6 +34,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
+import type { LiveVideoStatus } from "../lib/liveVideo";
 
 type LiveTopic =
   | "Tarot & Spirituality"
@@ -103,6 +105,10 @@ function chatNameColor(sender: string) {
 }
 
 type Props = {
+  videoStream: MediaStream | null;
+  videoStatus: LiveVideoStatus;
+  videoError: string;
+  hasRealVideo: boolean;
   broadcaster: Broadcaster;
   isBroadcaster: boolean;
   isPaused: boolean;
@@ -115,6 +121,7 @@ type Props = {
   readingSpread: LiveSpread;
   readingCards: LiveReadingCard[];
   showInterpretations: boolean;
+  onBack: () => void;
   onBrowse: () => void;
   onStartBroadcast: () => void;
   onEarnings: () => void;
@@ -147,6 +154,10 @@ type Props = {
 };
 
 export default function ImmersiveLiveRoom({
+  videoStream,
+  videoStatus,
+  videoError,
+  hasRealVideo,
   broadcaster,
   isBroadcaster,
   isPaused,
@@ -159,6 +170,7 @@ export default function ImmersiveLiveRoom({
   readingSpread,
   readingCards,
   showInterpretations,
+  onBack,
   onBrowse,
   onStartBroadcast,
   onEarnings,
@@ -198,21 +210,44 @@ export default function ImmersiveLiveRoom({
   const [broadcastHashtags, setBroadcastHashtags] = useState(broadcaster.hashtags ?? "");
   const [manualCardIds, setManualCardIds] = useState<(number | "")[]>([]);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isAudioBlocked, setIsAudioBlocked] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.srcObject = videoStream;
+    setIsAudioBlocked(false);
+    if (!videoStream) return;
+    video.play().catch(() => {
+      // Autoplay with sound can be blocked; fall back to muted playback until the viewer taps
+      video.muted = true;
+      setIsAudioBlocked(true);
+      video.play().catch(() => undefined);
+    });
+  }, [videoStream]);
+
   const spreadSize = readingSpread === "single" ? 1 : 3;
   const selectedManualCardIds = manualCardIds.slice(0, spreadSize).filter((id): id is number => typeof id === "number");
   const hasCompleteManualSelection = selectedManualCardIds.length === spreadSize && new Set(selectedManualCardIds).size === spreadSize;
 
   return (
-    <section className="relative isolate h-full min-h-[100svh] w-full overflow-hidden bg-[#09070c] text-slate-100">
+    <section className="relative isolate h-full min-h-full w-full overflow-hidden bg-[#09070c] text-slate-100">
       <div className={`absolute inset-0 bg-gradient-to-br ${broadcaster.theme}`}>
-        {broadcaster.image && <img src={broadcaster.image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-90" />}
+        {!hasRealVideo && broadcaster.image && <img src={broadcaster.image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-90" />}
+        {hasRealVideo && <video ref={videoRef} autoPlay playsInline muted={isBroadcaster} className={`absolute inset-0 h-full w-full object-cover ${isBroadcaster ? "-scale-x-100" : ""} ${videoStream ? "" : "hidden"}`} />}
+        {hasRealVideo && !videoStream && <p role="status" className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-sm text-white/80">{videoError || (isBroadcaster ? (videoStatus === "requesting" ? "Allow camera and microphone access to go live…" : "Starting your camera…") : videoStatus === "error" ? "Could not connect to this broadcast's video." : "Connecting to the broadcaster's video…")}</p>}
+        {hasRealVideo && isAudioBlocked && !isBroadcaster && <button type="button" onClick={() => { if (videoRef.current) { videoRef.current.muted = false; videoRef.current.play().catch(() => undefined); } setIsAudioBlocked(false); }} className="absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded-full bg-black/60 px-4 py-2 text-xs font-semibold text-white backdrop-blur-md">Tap to unmute</button>}
         <div className={`absolute inset-0 bg-[radial-gradient(circle_at_65%_28%,rgba(255,255,255,.12),transparent_28%),linear-gradient(180deg,rgba(9,7,12,.45)_0%,transparent_28%,rgba(9,7,12,.12)_48%,rgba(9,7,12,.86)_100%)] ${isPaused ? "bg-black/45" : ""}`} />
       </div>
 
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))]">
-        <button onClick={onBrowse} aria-label="Browse Live Broadcasts" title="Browse Live Broadcasts" className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-full border border-mystic-gold/35 bg-black/40 px-3 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/60 active:scale-95">
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={onBack} aria-label={isBroadcaster ? "Back (your broadcast stays live)" : "Leave broadcast"} title={isBroadcaster ? "Back (your broadcast stays live)" : "Leave broadcast"} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-lg backdrop-blur-md transition hover:bg-black/60 active:scale-95"><ArrowLeft className="h-5 w-5" /></button>
+  <button onClick={onBrowse} aria-label="Browse Live Broadcasts" title="Browse Live Broadcasts" className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-full border border-mystic-gold/35 bg-black/40 px-3 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/60 active:scale-95">
           <Users className="h-5 w-5" /><span className="hidden text-[10px] font-semibold sm:inline">Browse</span>
         </button>
+        </div>
         <div className="flex min-w-0 items-center gap-2 rounded-full border border-white/15 bg-black/35 px-3 py-2 shadow-lg backdrop-blur-md">
           <span className={`relative flex h-2 w-2 shrink-0 rounded-full ${isPaused ? "bg-amber-300" : "bg-rose-400"}`} />
           <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-white">{isPaused ? "Paused" : "Live"}</span>
@@ -225,7 +260,6 @@ export default function ImmersiveLiveRoom({
           <button onClick={() => { setBroadcastTitle(broadcaster.title); setBroadcastDescription(broadcaster.description ?? ""); setBroadcastHashtags(broadcaster.hashtags ?? ""); setIsBroadcastInfoOpen(true); }} aria-label="Edit broadcast information" title="Edit broadcast information" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-mystic-gold/35 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/50 active:scale-95"><Pencil className="h-5 w-5" /></button>
         ) : (
           <div className="flex shrink-0 gap-2">
-            <button onClick={onShare} aria-label="Share broadcast" title="Share broadcast" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-white shadow-lg backdrop-blur-md transition hover:bg-black/50 active:scale-95"><Share2 className="h-5 w-5" /></button>
             <button onClick={onStartBroadcast} aria-label="Start your own broadcast" title="Start your own broadcast" className="flex h-11 w-11 items-center justify-center rounded-full border border-mystic-gold/40 bg-black/30 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/50 active:scale-95"><Video className="h-5 w-5" /></button>
           </div>
         )}
@@ -307,15 +341,16 @@ export default function ImmersiveLiveRoom({
           <button onClick={() => { chatInputRef.current?.focus(); }} aria-label="Open live chat" title="Open chat" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-teal-100 shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><MessageCircle className="h-5 w-5" /><span className="text-[8px] font-semibold">Chat</span></button>
           <button onClick={onShare} aria-label="Share broadcast" title="Share broadcast" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-white shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Share2 className="h-5 w-5" /><span className="text-[8px] font-semibold">Share</span></button>
         </>}
-        {canUseTarot && <button onClick={() => setIsReadingControlsOpen(true)} aria-label="Open live reading controls" title="Live reading controls" className="flex min-h-12 min-w-12 items-center justify-center rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Sparkles className="h-5 w-5" /></button>}
+        {canUseTarot && <button onClick={() => setIsReadingControlsOpen(true)} aria-label="Open live reading controls" title="Live reading controls" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Sparkles className="h-5 w-5" /><span className="text-[8px] font-semibold">Tarot</span></button>}
 
-              {isCardPickerOpen && canUseTarot && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsCardPickerOpen(false)}><section role="dialog" aria-modal="true" aria-label="Choose cards for a live Tarot reading" onClick={(event) => event.stopPropagation()} className="max-h-[82dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-mystic-gold/25 bg-[#100c18] px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl"><div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" /><div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-mystic-gold">Reader only · private</p><h2 className="font-display text-lg text-white">Choose the cards</h2></div><button onClick={() => setIsCardPickerOpen(false)} aria-label="Close card picker" className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-black/20 p-1"><button onClick={() => { onChooseSpread("single"); setManualCardIds([]); }} aria-pressed={readingSpread === "single"} className={`h-10 rounded-lg text-xs font-semibold transition ${readingSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>1 card</button><button onClick={() => { onChooseSpread("three"); setManualCardIds([]); }} aria-pressed={readingSpread === "three"} className={`h-10 rounded-lg text-xs font-semibold transition ${readingSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>3 cards</button></div><div className="space-y-3">{Array.from({ length: spreadSize }, (_, index) => {
+      </aside>
+
+      {isCardPickerOpen && canUseTarot && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsCardPickerOpen(false)}><section role="dialog" aria-modal="true" aria-label="Choose cards for a live Tarot reading" onClick={(event) => event.stopPropagation()} className="max-h-[82dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-mystic-gold/25 bg-[#100c18] px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl"><div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" /><div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-mystic-gold">Reader only · private</p><h2 className="font-display text-lg text-white">Choose the cards</h2></div><button onClick={() => setIsCardPickerOpen(false)} aria-label="Close card picker" className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-black/20 p-1"><button onClick={() => { onChooseSpread("single"); setManualCardIds([]); }} aria-pressed={readingSpread === "single"} className={`h-10 rounded-lg text-xs font-semibold transition ${readingSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>1 card</button><button onClick={() => { onChooseSpread("three"); setManualCardIds([]); }} aria-pressed={readingSpread === "three"} className={`h-10 rounded-lg text-xs font-semibold transition ${readingSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>3 cards</button></div><div className="space-y-3">{Array.from({ length: spreadSize }, (_, index) => {
                 const position = readingSpread === "single" ? "Guidance" : ["Past", "Present", "Future"][index];
                 const selectedId = manualCardIds[index] ?? "";
                 const availableCards = TAROT_DECK.filter((card) => !card.isHidden && (!manualCardIds.includes(card.id) || selectedId === card.id));
                 return <label key={position} className="block space-y-1.5"><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-200">{position}</span><select value={selectedId} onChange={(event) => setManualCardIds((previous) => { const next = previous.slice(0, spreadSize); next[index] = event.target.value ? Number(event.target.value) : ""; return next; })} className="h-12 w-full rounded-lg border border-white/10 bg-[#171122] px-3 text-sm text-white"><option value="">Choose a card</option>{availableCards.map((card) => <option key={card.id} value={card.id}>{card.name}</option>)}</select></label>;
               })}</div><button disabled={!hasCompleteManualSelection} onClick={() => { onDrawSelectedCards(selectedManualCardIds); setIsCardPickerOpen(false); }} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-mystic-gold text-sm font-semibold text-[#100b1c] disabled:cursor-not-allowed disabled:opacity-40"><Check className="h-4 w-4" />Place selected cards on stream</button></section></div>}
-      </aside>
 
       <div className={`absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-4 right-[4.75rem] z-10 flex ${readingCards.length > 0 ? "max-h-[15dvh]" : "max-h-[28dvh]"} flex-col justify-end overflow-y-auto pr-1 sm:bottom-[calc(6rem+env(safe-area-inset-bottom))] sm:left-6 sm:right-24`}>
         <div className="space-y-1.5 rounded-xl bg-gradient-to-t from-black/70 via-black/30 to-transparent px-2 pb-2 pt-5">

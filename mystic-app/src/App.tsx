@@ -10,6 +10,7 @@ import {
   OperationType, 
   handleFirestoreError 
 } from "./firebase";
+import { createAvatarDataUrl } from "./lib/avatarImage";
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -84,6 +85,8 @@ import {
 } from "./data/spiritualData";
 import CelestialOnboarding from "./components/CelestialOnboarding";
 import LiveCommunity from "./components/LiveCommunity";
+import MyProfile from "./components/MyProfile";
+import type { UserIdentity } from "./types/userProfile";
 
 // Path mappings to high-fidelity generated images
 const COSMIC_BACKDROP = "/src/assets/images/cosmic_tarot_backdrop_1790704955137.jpg";
@@ -96,7 +99,7 @@ export default function App() {
   const isSandboxConnectPath = window.location.pathname === "/stripe-sandbox-connect-onboard";
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "dashboard" | "admin">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "dashboard" | "profile" | "admin">("home");
 
   // Audio mute/unmute state
   const [isMuted, setIsMuted] = useState(false);
@@ -161,6 +164,22 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [authSuccessMsg, setAuthSuccessMsg] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [profileSaveError, setProfileSaveError] = useState("");
+  const [profileSaveMessage, setProfileSaveMessage] = useState("");
+
+  useEffect(() => {
+    if (!profileSaveMessage) return;
+    const timer = window.setTimeout(() => setProfileSaveMessage(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [profileSaveMessage]);
+
+  useEffect(() => {
+    if (activeTab !== "profile") {
+      setProfileSaveMessage("");
+      setProfileSaveError("");
+    }
+  }, [activeTab]);
 
   // --- ADMIN PANEL SUB-STATES ---
   const [adminSubTab, setAdminSubTab] = useState<"broadcast" | "deck" | "shuffle" | "staff" | "financials">("broadcast");
@@ -170,6 +189,12 @@ export default function App() {
   const [deckSearch, setDeckSearch] = useState("");
   const [staffEmailInput, setStaffEmailInput] = useState("");
   const [staffList, setStaffList] = useState<any[]>([]);
+  const [tarotReaderEmailInput, setTarotReaderEmailInput] = useState("");
+  const [tarotReaderList, setTarotReaderList] = useState<any[]>([]);
+  // Admins/owners get Tarot automatically; other users need the admin-granted tarotReader flag
+  const hasTarotReaderPermission = Boolean(
+    currentUser?.emailVerified && (isAdminAuthenticated || dbUserDoc?.tarotReader === true)
+  );
   const [financialStats, setFinancialStats] = useState<any>({
     totalGrossVolume: 0,
     totalPlatformRevenue: 0,
@@ -356,7 +381,8 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setIsAuthLoading(true);
-      if (user) {
+      // Anonymous Live viewers are not app members: no profile, no member state
+      if (user && !user.isAnonymous) {
         setCurrentUser(user);
         
         // Fetch or create user record in Firestore
@@ -497,6 +523,21 @@ export default function App() {
     return () => unsubscribe();
   }, [isAdminAuthenticated]);
 
+  // Real-time synchronization of users granted Tarot Reader permission
+  useEffect(() => {
+    if (!isAdminAuthenticated) {
+      setTarotReaderList([]);
+      return;
+    }
+    const q = query(collection(db, "users"), where("tarotReader", "==", true));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setTarotReaderList(snapshot.docs.map((d) => ({ uid: d.id, ...d.data() })));
+    }, (error) => {
+      console.error("Failed to sync Tarot Reader roster:", error);
+    });
+    return () => unsubscribe();
+  }, [isAdminAuthenticated]);
+
   // Real-time synchronization of Financial Performance stats & Reconciliation Records
   useEffect(() => {
     if (!isAdminAuthenticated) {
@@ -584,6 +625,11 @@ export default function App() {
       return;
     }
 
+    if (authMode === "register" && !authDisplayName.trim()) {
+      setAuthError("Chosen name is required.");
+      return;
+    }
+
     try {
       if (authMode === "login") {
         playCelestialSound("success");
@@ -593,7 +639,7 @@ export default function App() {
         playCelestialSound("success");
         const userCred = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword.trim());
         await updateProfile(userCred.user, {
-          displayName: authDisplayName.trim() || "Celestial Member"
+          displayName: authDisplayName.trim()
         });
         
         // Explicitly trigger user profile setDoc
@@ -601,7 +647,7 @@ export default function App() {
         const profile = {
           uid: userCred.user.uid,
           email: userCred.user.email || "",
-          displayName: authDisplayName.trim() || "Celestial Member",
+          displayName: authDisplayName.trim(),
           role: userCred.user.email === "kertisjohnson7@gmail.com" ? "admin" : "member",
           gemBalance: 850,
           cloutPoints: 0,
@@ -620,10 +666,60 @@ export default function App() {
         setAuthError("This email coordinate is already linked to a celestial profile.");
       } else if (err.code === "auth/weak-password") {
         setAuthError("Your passcode must consist of at least 6 characters.");
+      } else if (err.code === "auth/operation-not-allowed" || String(err.message).includes("PASSWORD_LOGIN_DISABLED")) {
+        setAuthError("Email/password sign-in is not enabled for this Mysticmentor project yet.");
       } else {
         setAuthError(err.message || "An unexpected validation exception occurred.");
       }
     }
+  };
+
+  const handleSaveProfile = async (displayName: string, photo: File | null): Promise<boolean> => {
+    if (!currentUser) {
+      setProfileSaveError("Sign in again before saving your profile.");
+      return false;
+    }
+
+    setIsProfileSaving(true);
+    setProfileSaveError("");
+    setProfileSaveMessage("");
+
+    const withTimeout = <T,>(operation: Promise<T>, label: string) =>
+      Promise.race<T>([
+        operation,
+        new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(`${label} timed out. Please check your connection and try again.`)), 20000))
+      ]);
+
+    let uploadedAvatarUrl: string | undefined;
+    const currentAvatarUrl = dbUserDoc?.avatarUrl || currentUser.photoURL || undefined;
+    try {
+      if (photo) {
+        uploadedAvatarUrl = await createAvatarDataUrl(photo);
+      }
+
+      await withTimeout(updateDoc(doc(db, "users", currentUser.uid), {
+        displayName,
+        ...((uploadedAvatarUrl || currentAvatarUrl) ? { avatarUrl: uploadedAvatarUrl || currentAvatarUrl } : {}),
+        updatedAt: new Date().toISOString()
+      }), "Saving your profile");
+    } catch (error) {
+      console.error("Failed to save member profile:", error);
+      setProfileSaveError(error instanceof Error ? error.message : "Unable to save profile changes.");
+      setIsProfileSaving(false);
+      return false;
+    }
+
+    try {
+      await withTimeout(updateProfile(currentUser, {
+        displayName,
+      }), "Authentication profile sync");
+      setProfileSaveMessage("Your profile has been saved.");
+    } catch (error) {
+      console.error("Profile saved, but Firebase Authentication profile sync failed:", error);
+      setProfileSaveMessage("Your profile was saved, but its authentication profile copy could not be synchronized. Please try saving again.");
+    }
+    setIsProfileSaving(false);
+    return true;
   };
 
   const handleSignOut = async () => {
@@ -1102,6 +1198,29 @@ export default function App() {
     }
   };
 
+  // Grant or revoke the Tarot Reader permission (stored on the user's Firestore profile)
+  const handleSetTarotReader = async (e: React.FormEvent | null, target: { uid?: string; email: string }, enabled: boolean) => {
+    e?.preventDefault();
+    try {
+      let uid = target.uid;
+      if (!uid) {
+        const email = target.email.trim().toLowerCase();
+        if (!email) return;
+        const snap = await getDocs(query(collection(db, "users"), where("email", "==", email)));
+        if (snap.empty) {
+          alert(`No registered profile found for "${email}".`);
+          return;
+        }
+        uid = snap.docs[0].id;
+      }
+      await updateDoc(doc(db, "users", uid), { tarotReader: enabled, updatedAt: new Date().toISOString() });
+      if (!target.uid) setTarotReaderEmailInput("");
+    } catch (error) {
+      console.error("Failed to update Tarot Reader permission:", error);
+      alert("Permission Denied: Only authorized administrators can change Tarot Reader access.");
+    }
+  };
+
   // Helper to dynamically get Lucide Icon components
   const getLucideIcon = (name: string, className = "w-6 h-6") => {
     const iconMap: Record<string, any> = {
@@ -1277,7 +1396,7 @@ export default function App() {
     <div className="min-h-screen bg-[#070412] text-slate-100 flex flex-col items-center">
       
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
-      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none" : "max-w-md min-h-screen border-x border-[#1a1133] pb-20"}`}>
+      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
         
         {/* Continuous Floating & Pulsing Cosmic Orbs at varied sizes and depths */}
         {activeTab !== "live" && <>
@@ -1374,6 +1493,8 @@ export default function App() {
             <CelestialOnboarding
               authMode={authMode}
               setAuthMode={setAuthMode}
+              authDisplayName={authDisplayName}
+              setAuthDisplayName={setAuthDisplayName}
               authEmail={authEmail}
               setAuthEmail={setAuthEmail}
               authPassword={authPassword}
@@ -2301,9 +2422,8 @@ export default function App() {
           {activeTab === "live" && (
             <LiveCommunity
               onExit={() => setActiveTab("home")}
-              isAuthorizedReader={Boolean(
-                currentUser && currentUser.email !== "kertisjohnson7@gmail.com" && isAdminAuthenticated
-              )}
+              isAuthorizedReader={hasTarotReaderPermission}
+              currentUserId={currentUser?.uid ?? null}
             />
           )}
           {activeTab === "live" && false && (
@@ -2636,7 +2756,7 @@ export default function App() {
                   <form onSubmit={handleAuthSubmit} className="space-y-3.5 pt-2 text-xs">
                     {authMode === "register" && (
                       <div>
-                        <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold tracking-tight">Display Name / Star Coordinates</label>
+                        <label className="text-[10px] text-slate-400 block mb-1 uppercase font-bold tracking-tight">Chosen Name</label>
                         <input
                           type="text"
                           value={authDisplayName}
@@ -2956,6 +3076,21 @@ export default function App() {
               </div>
 
             </div>
+          )}
+
+          {activeTab === "profile" && currentUser && (
+            <MyProfile
+              identity={{
+                uid: currentUser.uid,
+                displayName: dbUserDoc?.displayName || currentUser.displayName || currentUser.email?.split("@")[0] || "Celestial Member",
+                avatarUrl: dbUserDoc?.avatarUrl || currentUser.photoURL || null
+              } satisfies UserIdentity}
+              email={currentUser.email || ""}
+              isSaving={isProfileSaving}
+              saveError={profileSaveError}
+              saveMessage={profileSaveMessage}
+              onSave={handleSaveProfile}
+            />
           )}
 
           {/* ==================== 7. DEDICATED ADMIN CONSOLE VIEW ==================== */}
@@ -3757,6 +3892,41 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Tarot Reader permission */}
+                  <div className="p-4 rounded-xl border border-mystic-gold/30 bg-[#070412]/80 space-y-3">
+                    <span className="text-[10px] font-mono tracking-widest text-mystic-gold font-bold uppercase block">
+                      Tarot Reader Access
+                    </span>
+                    <p className="text-[10px] text-slate-400 leading-normal">
+                      Administrators always have Tarot controls. Grant Tarot Reader to a registered user so they can run readings in their live broadcasts.
+                    </p>
+                    <form onSubmit={(e) => handleSetTarotReader(e, { email: tarotReaderEmailInput }, true)} className="flex gap-2">
+                      <input
+                        type="email"
+                        value={tarotReaderEmailInput}
+                        onChange={(e) => setTarotReaderEmailInput(e.target.value)}
+                        placeholder="reader@coordinate.com"
+                        className="flex-1 bg-[#0b081c] border border-[#2c1654] rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-mystic-gold"
+                        required
+                      />
+                      <button type="submit" className="py-2 px-4 rounded-lg bg-mystic-gold text-black font-bold text-xs uppercase cursor-pointer hover:brightness-110 active:scale-95 transition-all">
+                        Grant
+                      </button>
+                    </form>
+                    {tarotReaderList.map((reader) => (
+                      <div key={reader.uid} className="flex justify-between items-center text-xs p-2 rounded-lg bg-[#120a26]/60 border border-[#2c1654]/40">
+                        <span className="font-mono text-[10px] text-slate-300 truncate">{reader.email}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleSetTarotReader(null, { uid: reader.uid, email: reader.email }, false)}
+                          className="text-[9px] px-2.5 py-1 text-red-400 hover:text-white bg-red-950/20 border border-red-500/20 rounded uppercase font-bold active:scale-95 transition-all cursor-pointer"
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
                 </div>
               )}
 
@@ -3946,100 +4116,6 @@ export default function App() {
 
         </main>
 
-        {activeTab !== "live" && (currentUser || hasSkippedAuth) && (
-          <aside className="fixed top-1/2 z-30 hidden -translate-y-1/2 md:block" style={{ left: "min(calc(50% + 14.5rem), calc(100% - 4rem))" }}>
-            <button
-              onClick={() => { setActiveTab("live"); playCelestialSound("flip"); }}
-              aria-label="Open Live broadcasters"
-              title="Live broadcasters"
-              className="relative flex h-11 w-11 items-center justify-center rounded-full border border-red-400/40 bg-[#120a26] text-red-300 shadow-lg transition-colors hover:border-red-300 hover:bg-red-950/50"
-            >
-              <Video className="h-5 w-5" />
-              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500" />
-            </button>
-          </aside>
-        )}
-
-        {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
-        {activeTab !== "live" && <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
-          isAdminAuthenticated ? "grid-cols-7" : "grid-cols-6"
-        }`}>
-          
-          <button
-            onClick={() => { setActiveTab("home"); playCelestialSound("flip"); }}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-              activeTab === "home" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Compass className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Home</span>
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("tarot"); playCelestialSound("flip"); }}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-              activeTab === "tarot" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Wand2 className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Tarot</span>
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("zodiac"); playCelestialSound("flip"); }}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-              activeTab === "zodiac" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Moon className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Zodiac</span>
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("numerology"); playCelestialSound("flip"); }}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-              activeTab === "numerology" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Activity className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Numbers</span>
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("live"); playCelestialSound("flip"); }}
-            className="relative flex h-full min-h-[44px] flex-col items-center justify-center text-slate-400 transition-all hover:text-white"
-          >
-            <span className="absolute top-2 right-4 flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500"></span>
-            </span>
-            <Video className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Live</span>
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("dashboard"); playCelestialSound("flip"); }}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-              activeTab === "dashboard" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <User className="w-5 h-5" />
-            <span className="text-[9px] font-semibold tracking-tight mt-1">Member</span>
-          </button>
-
-          {isAdminAuthenticated && (
-            <button
-              onClick={() => { setActiveTab("admin"); playCelestialSound("flip"); }}
-              className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-                activeTab === "admin" ? "text-teal-400" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <TrendingUp className="w-5 h-5" />
-              <span className="text-[9px] font-semibold tracking-tight mt-1">Admin</span>
-            </button>
-          )}
-
-        </nav>}
 
         {/* --- ADMIN ACCESS GATE PASSCODE MODAL --- */}
         {showAdminGate && (
@@ -4133,6 +4209,87 @@ export default function App() {
         )}
 
       </div>
+
+        {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
+        <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
+          isAdminAuthenticated ? "grid-cols-7" : "grid-cols-6"
+        }`}>
+          
+          <button
+            onClick={() => { setActiveTab("home"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "home" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Compass className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Home</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab("tarot"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "tarot" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Wand2 className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Tarot</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab("zodiac"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "zodiac" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Moon className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Zodiac</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab("numerology"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "numerology" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Activity className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Numbers</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab("live"); playCelestialSound("flip"); }}
+            className="relative flex h-full min-h-[44px] flex-col items-center justify-center text-slate-400 transition-all hover:text-white"
+          >
+            <span className="absolute top-2 right-4 flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500"></span>
+            </span>
+            <Video className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Live</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab(currentUser ? "profile" : "dashboard"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "dashboard" || activeTab === "profile" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <User className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Member</span>
+          </button>
+
+          {isAdminAuthenticated && (
+            <button
+              onClick={() => { setActiveTab("admin"); playCelestialSound("flip"); }}
+              className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+                activeTab === "admin" ? "text-teal-400" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <TrendingUp className="w-5 h-5" />
+              <span className="text-[9px] font-semibold tracking-tight mt-1">Admin</span>
+            </button>
+          )}
+
+        </nav>
     </div>
   );
 }

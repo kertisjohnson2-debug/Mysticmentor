@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { collection, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firestore";
+import { signInAnonymously } from "firebase/auth";
+import { auth, db } from "../firebase";
 import {
   ArrowLeft,
   BarChart3,
@@ -19,6 +22,7 @@ import {
   Video,
   X
 } from "lucide-react";
+import { useLiveBroadcast, useLiveViewer } from "../lib/liveVideo";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import ImmersiveLiveRoom, { type LiveReadingCard, type LiveSpread } from "./ImmersiveLiveRoom";
 
@@ -44,6 +48,25 @@ type Broadcaster = {
   image?: string;
   lifetimeGems: number;
 };
+
+type RemoteReading = {
+  broadcasterUid: string;
+  name: string;
+  avatar: string;
+  title: string;
+  description?: string;
+  hashtags?: string;
+  topic: LiveTopic;
+  isPaused: boolean;
+  spread: LiveSpread;
+  cards: { id: number; reversed: boolean; revealed: boolean }[];
+  showInterpretations: boolean;
+  updatedAt: number;
+};
+
+// A published broadcast is considered live while its heartbeat is recent
+const BROADCAST_HEARTBEAT_MS = 30000;
+const BROADCAST_STALE_MS = 90000;
 
 type ChatLine = { id: number; sender: string; text: string; kind?: "gift" | "system" };
 
@@ -95,7 +118,7 @@ function formatCount(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: () => void; isAuthorizedReader: boolean }) {
+export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null }) {
   const [screen, setScreen] = useState<"directory" | "setup" | "broadcast" | "viewer" | "earnings">("viewer");
   const [selectedTopic, setSelectedTopic] = useState<LiveTopic | "All">("All");
   const [selectedBroadcaster, setSelectedBroadcaster] = useState<Broadcaster>(initialBroadcasters[0]);
@@ -120,6 +143,23 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   const [customTip, setCustomTip] = useState("");
   const [notice, setNotice] = useState("");
   const [chat, setChat] = useState<ChatLine[]>(mockChat);
+  const [viewerReturn, setViewerReturn] = useState<"directory" | "exit">("exit");
+  const [remoteReadings, setRemoteReadings] = useState<RemoteReading[]>([]);
+  const [clock, setClock] = useState(() => Date.now());
+  const [guestUid, setGuestUid] = useState<string | null>(null);
+
+  // Signed-out visitors get an anonymous, viewer-only Firebase identity (own UID, no profile doc)
+  useEffect(() => {
+    if (currentUserId) { setGuestUid(null); return; }
+    let cancelled = false;
+    const existing = auth.currentUser;
+    if (existing?.isAnonymous) { setGuestUid(existing.uid); return; }
+    signInAnonymously(auth)
+      .then((credential) => { if (!cancelled) setGuestUid(credential.user.uid); })
+      .catch((error) => console.error("Anonymous Live viewing is unavailable:", error));
+    return () => { cancelled = true; };
+  }, [currentUserId]);
+  const viewerUid = currentUserId ?? guestUid;
 
   useEffect(() => {
     if (!liveStartedAt || isBroadcastPaused) return;
@@ -134,11 +174,101 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   }, [notice]);
 
   const currentRank = [...ranks].reverse().find((rank) => rank.gems <= selectedBroadcaster.lifetimeGems) ?? ranks[0];
-  const visibleBroadcasters = [...initialBroadcasters, ...(myBroadcaster ? [myBroadcaster] : [])]
-    .filter((broadcaster) => selectedTopic === "All" || broadcaster.topic === selectedTopic);
   const readerProfile = isAuthorizedReader;
+  const tarotAllowed = readerProfile && screen === "broadcast";
+  const isLiveNow = Boolean(myBroadcaster && liveStartedAt);
+  const canPublish = isLiveNow && readerProfile && Boolean(currentUserId);
+
+  const toBroadcaster = (remote: RemoteReading): Broadcaster => ({
+    id: `live-${remote.broadcasterUid}`,
+    name: remote.name,
+    avatar: remote.avatar,
+    title: remote.title,
+    description: remote.description,
+    hashtags: remote.hashtags,
+    topic: remote.topic,
+    viewers: 1,
+    theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]",
+    image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg",
+    lifetimeGems: 0
+  });
+
+  const liveRemotes = useMemo(
+    () => remoteReadings.filter((remote) => remote.broadcasterUid !== viewerUid && clock - remote.updatedAt < BROADCAST_STALE_MS),
+    [remoteReadings, viewerUid, clock]
+  );
+  const activeRemote = selectedBroadcaster.id.startsWith("live-")
+    ? liveRemotes.find((remote) => `live-${remote.broadcasterUid}` === selectedBroadcaster.id)
+    : undefined;
+  const remoteReadingCards: LiveReadingCard[] = (activeRemote?.cards ?? []).flatMap((entry) => {
+    const card = TAROT_DECK.find((item) => item.id === entry.id && !item.isHidden);
+    return card ? [{ card, isReversed: entry.reversed, isRevealed: entry.revealed }] : [];
+  });
+  const visibleBroadcasters = [...initialBroadcasters, ...liveRemotes.map(toBroadcaster), ...(myBroadcaster ? [myBroadcaster] : [])]
+    .filter((broadcaster) => selectedTopic === "All" || broadcaster.topic === selectedTopic);
+
+  // Real device-to-device video. The broadcaster's camera stays on while live, even when browsing other screens
+  const broadcastVideo = useLiveBroadcast(currentUserId, Boolean(currentUserId) && isLiveNow, isBroadcastPaused);
+  const viewerBroadcasterUid = screen === "viewer" ? activeRemote?.broadcasterUid ?? null : null;
+  const viewerVideo = useLiveViewer(viewerBroadcasterUid, viewerUid, Boolean(viewerBroadcasterUid));
+
+  // Viewers receive every broadcaster's published Tarot state in real time
+  useEffect(() => {
+    if (!viewerUid) return;
+    const unsubscribe = onSnapshot(collection(db, "liveReadings"), (snapshot) => {
+      setRemoteReadings(snapshot.docs.map((item) => item.data() as RemoteReading));
+    }, (error) => console.error("Failed to sync live broadcasts:", error));
+    const tick = window.setInterval(() => setClock(Date.now()), 15000);
+    return () => { unsubscribe(); window.clearInterval(tick); };
+  }, [viewerUid]);
+
+  // A Tarot-permitted broadcaster publishes the shared reading state (rules re-check the permission)
+  useEffect(() => {
+    if (!canPublish || !currentUserId || !myBroadcaster) return;
+    const publish = () => setDoc(doc(db, "liveReadings", currentUserId), {
+      broadcasterUid: currentUserId,
+      name: myBroadcaster.name,
+      avatar: myBroadcaster.avatar,
+      title: myBroadcaster.title,
+      description: myBroadcaster.description ?? "",
+      hashtags: myBroadcaster.hashtags ?? "",
+      topic: myBroadcaster.topic,
+      isPaused: isBroadcastPaused,
+      spread: readingSpread,
+      cards: liveReading.map((item) => ({ id: item.card.id, reversed: item.isReversed, revealed: item.isRevealed })),
+      showInterpretations,
+      updatedAt: Date.now()
+    }).catch((error) => console.error("Failed to publish live reading:", error));
+    publish();
+    const heartbeat = window.setInterval(publish, BROADCAST_HEARTBEAT_MS);
+    return () => window.clearInterval(heartbeat);
+  }, [canPublish, currentUserId, myBroadcaster, isBroadcastPaused, readingSpread, liveReading, showInterpretations]);
+
+  // Remove the published broadcast when it ends, the permission is revoked, or the room unmounts
+  useEffect(() => {
+    if (!canPublish || !currentUserId) return;
+    return () => { deleteDoc(doc(db, "liveReadings", currentUserId)).catch(() => undefined); };
+  }, [canPublish, currentUserId]);
+
+  // A remote broadcast that stops publishing sends viewers back to Browse
+  useEffect(() => {
+    if (screen === "viewer" && selectedBroadcaster.id.startsWith("live-") && !activeRemote) {
+      setScreen("directory");
+      setNotice("That broadcast has ended.");
+    }
+  }, [screen, selectedBroadcaster.id, activeRemote]);
+
+  // Revoking Tarot Reader mid-broadcast removes any reading from the stream
+  useEffect(() => {
+    if (!isAuthorizedReader) setLiveReading([]);
+  }, [isAuthorizedReader]);
 
   const startBroadcast = () => {
+    // Guests (anonymous) are viewers only
+    if (!currentUserId) {
+      setNotice("Sign in to start a broadcast.");
+      return;
+    }
     const newBroadcaster: Broadcaster = {
       id: "your-live",
       name: readerProfile ? "Celestial Reader" : "Kertis Johnson",
@@ -206,6 +336,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   };
 
   const publishLiveReading = (cards: TarotCard[]) => {
+    if (!tarotAllowed) return;
     setLiveReading(cards.map((card) => ({
       card,
       isReversed: Math.random() > 0.7,
@@ -216,6 +347,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   };
 
   const startLiveReading = () => {
+    if (!tarotAllowed) return;
     const availableCards = TAROT_DECK.filter((card) => !card.isHidden);
     const shuffledCards = [...availableCards];
     for (let index = shuffledCards.length - 1; index > 0; index -= 1) {
@@ -227,6 +359,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   };
 
   const startSelectedLiveReading = (cardIds: number[]) => {
+    if (!tarotAllowed) return;
     const count = readingSpread === "single" ? 1 : 3;
     if (cardIds.length !== count || new Set(cardIds).size !== count) return;
     const selectedCards = cardIds.slice(0, count).map((id) => TAROT_DECK.find((card) => card.id === id && !card.isHidden));
@@ -235,6 +368,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   };
 
   const revealLiveCard = (index: number) => {
+    if (!tarotAllowed) return;
     const readingCard = liveReading[index];
     if (!readingCard || readingCard.isRevealed) return;
     setLiveReading((cards) => cards.map((card, cardIndex) => cardIndex === index ? { ...card, isRevealed: true } : card));
@@ -248,12 +382,13 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   };
 
   const revealAllLiveCards = () => {
+    if (!tarotAllowed) return;
     if (liveReading.every((card) => card.isRevealed)) return;
     setLiveReading((cards) => cards.map((card) => ({ ...card, isRevealed: true })));
     setChat((messages) => [...messages, { id: Date.now(), sender: "Celestial Reader", text: "revealed the full spread", kind: "system" }]);
   };
 
-  const resetLiveReading = () => setLiveReading([]);
+  const resetLiveReading = () => { if (tarotAllowed) setLiveReading([]); };
 
   const videoSurface = (broadcaster: Broadcaster, large = false, showChatOverlay = false) => (
     <div className={`relative isolate overflow-hidden bg-gradient-to-br ${broadcaster.theme} ${large ? "aspect-[4/5]" : "aspect-video"}`}>
@@ -271,11 +406,12 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   if (screen === "directory") {
     return (
       <section className="mx-auto min-h-[calc(100dvh-9rem)] max-w-2xl space-y-5 pb-5 text-slate-100">
-        <header className="flex items-center justify-between">{backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
+        <header className="flex items-center justify-between">{isLiveNow ? backButton(() => setScreen("broadcast"), "Back to your live broadcast") : backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
+        {notice && <p role="status" className="rounded-lg border border-mystic-gold/30 bg-mystic-gold/10 px-3 py-2 text-center text-xs text-mystic-gold">{notice}</p>}
         <button onClick={() => setScreen("setup")} className="flex w-full items-center justify-between rounded-xl border border-mystic-gold/40 bg-gradient-to-r from-mystic-gold/15 to-transparent px-4 py-3 text-left"><span><strong className="block font-display text-sm text-mystic-gold">Go live</strong><span className="text-xs text-slate-400">Start a broadcast with your community</span></span><ChevronRight className="h-5 w-5 text-mystic-gold" /></button>
         <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator</button>}</div>
           <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"><button onClick={() => setSelectedTopic("All")} className={`shrink-0 rounded-full border px-3 py-2 text-xs ${selectedTopic === "All" ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}>All</button>{topics.map(({ name, icon: Icon }) => <button key={name} onClick={() => setSelectedTopic(name)} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs ${selectedTopic === name ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}><Icon className="h-3.5 w-3.5" />{name}</button>)}</div>
-          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); setIsFollowing(false); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
+          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); setIsFollowing(false); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
         </section>
       </section>
     );
@@ -285,6 +421,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
     return (
       <section className="mx-auto max-w-lg space-y-6 pb-8 text-slate-100">
         <header className="flex items-center gap-3">{backButton(() => setScreen("directory"))}<div><p className="text-[10px] uppercase tracking-[0.18em] text-teal-300">Your broadcast</p><h1 className="font-display text-xl text-white">Set the intention</h1></div></header>
+        {notice && <p role="status" className="rounded-lg border border-mystic-gold/30 bg-mystic-gold/10 px-3 py-2 text-center text-xs text-mystic-gold">{notice}</p>}
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Broadcast title</span><input value={broadcastTitle} onChange={(event) => setBroadcastTitle(event.target.value)} maxLength={80} placeholder="What are we sharing today?" className="h-12 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-mystic-gold/70" /></label>
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Short description</span><textarea value={broadcastDescription} onChange={(event) => setBroadcastDescription(event.target.value)} maxLength={140} rows={2} placeholder="A little context for your viewers" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500 focus:border-mystic-gold/70" /></label>
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Hashtags / topics</span><input value={broadcastHashtags} onChange={(event) => setBroadcastHashtags(event.target.value)} maxLength={100} placeholder="#Tarot #Guidance" className="h-12 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-mystic-gold/70" /></label>
@@ -308,18 +445,29 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
   if (isBroadcaster || screen === "viewer") {
     return (
       <ImmersiveLiveRoom
-        broadcaster={selectedBroadcaster}
+        videoStream={isBroadcaster ? broadcastVideo.stream : viewerVideo.stream}
+        videoStatus={isBroadcaster ? broadcastVideo.status : viewerVideo.status}
+        videoError={isBroadcaster ? broadcastVideo.error : ""}
+        hasRealVideo={isBroadcaster ? Boolean(currentUserId) : Boolean(viewerBroadcasterUid)}
+        broadcaster={activeRemote ? toBroadcaster(activeRemote) : selectedBroadcaster}
         isBroadcaster={isBroadcaster}
-        isPaused={isBroadcastPaused}
+        onBack={() => {
+          if (isBroadcaster) {
+            setScreen("directory");
+            setNotice("You are still live. Use End to finish your broadcast.");
+          } else if (viewerReturn === "directory") setScreen("directory");
+          else onExit();
+        }}
+        isPaused={isBroadcaster ? isBroadcastPaused : Boolean(activeRemote?.isPaused)}
         canUseTarot={canUseTarot}
         currentRank={currentRank.name}
         elapsedSeconds={elapsedSeconds}
         viewerCount={viewerCount}
         giftsReceived={giftsReceived}
         isFollowing={isFollowing}
-        readingSpread={readingSpread}
-        readingCards={liveReading}
-        showInterpretations={showInterpretations}
+        readingSpread={isBroadcaster ? readingSpread : activeRemote?.spread ?? "three"}
+        readingCards={isBroadcaster ? liveReading : remoteReadingCards}
+        showInterpretations={isBroadcaster ? showInterpretations : activeRemote?.showInterpretations ?? true}
         onBrowse={() => setScreen("directory")}
         onStartBroadcast={() => setScreen("setup")}
         onEarnings={() => setScreen("earnings")}
@@ -336,6 +484,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader }: { onExit: 
         onToggleFollow={() => setIsFollowing((following) => !following)}
         onHeart={showHeart}
         onChooseSpread={(spread) => {
+          if (!tarotAllowed) return;
           setReadingSpread(spread);
           setLiveReading([]);
         }}
