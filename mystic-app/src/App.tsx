@@ -156,6 +156,7 @@ export default function App() {
   // --- REAL FIREBASE AUTHENTICATION STATES ---
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [dbUserDoc, setDbUserDoc] = useState<any>(null);
+  const [pendingMemberNavigation, setPendingMemberNavigation] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -418,6 +419,12 @@ export default function App() {
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!pendingMemberNavigation || isAuthLoading) return;
+    setActiveTab(currentUser ? "profile" : "dashboard");
+    setPendingMemberNavigation(false);
+  }, [pendingMemberNavigation, isAuthLoading, currentUser]);
 
   // Listen for real-time user document changes to update gem balances and roles
   useEffect(() => {
@@ -1393,7 +1400,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070412] text-slate-100 flex flex-col items-center">
+    <>
+    <div className="h-[100dvh] overflow-hidden bg-[#070412] text-slate-100 flex flex-col items-center">
       
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
       <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
@@ -1489,7 +1497,7 @@ export default function App() {
         <main className={`flex-1 min-h-0 z-10 overflow-y-auto ${activeTab === "live" ? "px-0 py-0" : "px-4 py-4"}`}>
 
 
-          {!currentUser && !hasSkippedAuth ? (
+          {!isAuthLoading && !currentUser && !hasSkippedAuth && activeTab !== "dashboard" ? (
             <CelestialOnboarding
               authMode={authMode}
               setAuthMode={setAuthMode}
@@ -2424,6 +2432,7 @@ export default function App() {
               onExit={() => setActiveTab("home")}
               isAuthorizedReader={hasTarotReaderPermission}
               currentUserId={currentUser?.uid ?? null}
+              displayName={currentUser ? dbUserDoc?.displayName || currentUser.displayName || currentUser.email?.split("@")[0] || undefined : undefined}
             />
           )}
           {activeTab === "live" && false && (
@@ -4210,7 +4219,9 @@ export default function App() {
 
       </div>
 
-        {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
+    </div>
+
+      {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
         <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
           isAdminAuthenticated ? "grid-cols-7" : "grid-cols-6"
         }`}>
@@ -4268,7 +4279,14 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => { setActiveTab(currentUser ? "profile" : "dashboard"); playCelestialSound("flip"); }}
+            onClick={() => {
+              playCelestialSound("flip");
+              if (isAuthLoading) {
+                setPendingMemberNavigation(true);
+                return;
+              }
+              setActiveTab(currentUser ? "profile" : "dashboard");
+            }}
             className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
               activeTab === "dashboard" || activeTab === "profile" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
             }`}
@@ -4290,6 +4308,6 @@ export default function App() {
           )}
 
         </nav>
-    </div>
+    </>
   );
 }

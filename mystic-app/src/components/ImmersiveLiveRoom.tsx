@@ -59,7 +59,7 @@ type Broadcaster = {
   lifetimeGems: number;
 };
 
-type ChatLine = { id: number; sender: string; text: string; kind?: "gift" | "system" };
+type ChatLine = { id: number | string; sender: string; text: string; kind?: "gift" | "system" };
 type LiveGift = { name: string; emoji: string; gems: number };
 export type LiveSpread = "single" | "three";
 export type LiveReadingCard = { card: TarotCard; isReversed: boolean; isRevealed: boolean };
@@ -225,7 +225,7 @@ export default function ImmersiveLiveRoom({
       setIsAudioBlocked(true);
       video.play().catch(() => undefined);
     });
-  }, [videoStream]);
+  }, [videoStream, hasRealVideo]);
 
   const spreadSize = readingSpread === "single" ? 1 : 3;
   const selectedManualCardIds = manualCardIds.slice(0, spreadSize).filter((id): id is number => typeof id === "number");

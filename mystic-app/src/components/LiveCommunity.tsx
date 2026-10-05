@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { collection, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firestore";
+import { collection, deleteDoc, doc, limitToLast, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
 import { signInAnonymously } from "firebase/auth";
 import { auth, db } from "../firebase";
 import {
@@ -22,7 +22,7 @@ import {
   Video,
   X
 } from "lucide-react";
-import { useLiveBroadcast, useLiveViewer } from "../lib/liveVideo";
+import { eventsRef, useLiveBroadcast, useLiveViewer, type LiveSessionMeta } from "../lib/liveVideo";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import ImmersiveLiveRoom, { type LiveReadingCard, type LiveSpread } from "./ImmersiveLiveRoom";
 
@@ -64,11 +64,13 @@ type RemoteReading = {
   updatedAt: number;
 };
 
+type LiveSessionDoc = LiveSessionMeta & { ownerUid: string; sessionId: string; startedAt: number; updatedAt: number };
+
 // A published broadcast is considered live while its heartbeat is recent
 const BROADCAST_HEARTBEAT_MS = 30000;
 const BROADCAST_STALE_MS = 90000;
 
-type ChatLine = { id: number; sender: string; text: string; kind?: "gift" | "system" };
+type ChatLine = { id: number | string; sender: string; text: string; kind?: "gift" | "system" };
 
 const topics: { name: LiveTopic; icon: typeof Sparkles }[] = [
   { name: "Tarot & Spirituality", icon: Sparkles },
@@ -118,7 +120,7 @@ function formatCount(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null }) {
+export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId, displayName }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null; displayName?: string }) {
   const [screen, setScreen] = useState<"directory" | "setup" | "broadcast" | "viewer" | "earnings">("viewer");
   const [selectedTopic, setSelectedTopic] = useState<LiveTopic | "All">("All");
   const [selectedBroadcaster, setSelectedBroadcaster] = useState<Broadcaster>(initialBroadcasters[0]);
@@ -145,6 +147,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [chat, setChat] = useState<ChatLine[]>(mockChat);
   const [viewerReturn, setViewerReturn] = useState<"directory" | "exit">("exit");
   const [remoteReadings, setRemoteReadings] = useState<RemoteReading[]>([]);
+  const [liveSessions, setLiveSessions] = useState<LiveSessionDoc[]>([]);
   const [clock, setClock] = useState(() => Date.now());
   const [guestUid, setGuestUid] = useState<string | null>(null);
 
@@ -152,11 +155,18 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   useEffect(() => {
     if (currentUserId) { setGuestUid(null); return; }
     let cancelled = false;
-    const existing = auth.currentUser;
-    if (existing?.isAnonymous) { setGuestUid(existing.uid); return; }
-    signInAnonymously(auth)
-      .then((credential) => { if (!cancelled) setGuestUid(credential.user.uid); })
-      .catch((error) => console.error("Anonymous Live viewing is unavailable:", error));
+    (async () => {
+      // Wait for Firebase to restore any saved session so a real member is never replaced
+      await auth.authStateReady();
+      if (cancelled) return;
+      const existing = auth.currentUser;
+      if (existing) {
+        if (existing.isAnonymous) setGuestUid(existing.uid);
+        return;
+      }
+      const credential = await signInAnonymously(auth);
+      if (!cancelled) setGuestUid(credential.user.uid);
+    })().catch((error) => console.error("Anonymous Live viewing is unavailable:", error));
     return () => { cancelled = true; };
   }, [currentUserId]);
   const viewerUid = currentUserId ?? guestUid;
@@ -179,38 +189,105 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const isLiveNow = Boolean(myBroadcaster && liveStartedAt);
   const canPublish = isLiveNow && readerProfile && Boolean(currentUserId);
 
-  const toBroadcaster = (remote: RemoteReading): Broadcaster => ({
-    id: `live-${remote.broadcasterUid}`,
-    name: remote.name,
-    avatar: remote.avatar,
-    title: remote.title,
+  const toBroadcaster = (remote: LiveSessionDoc): Broadcaster => ({
+    id: `live-${remote.ownerUid}`,
+    name: remote.name || "Live broadcaster",
+    avatar: remote.avatar || "LV",
+    title: remote.title || "Live now",
     description: remote.description,
     hashtags: remote.hashtags,
-    topic: remote.topic,
+    topic: (topics.some((item) => item.name === remote.topic) ? remote.topic : "Just Chatting") as LiveTopic,
     viewers: 1,
     theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]",
     image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg",
     lifetimeGems: 0
   });
 
-  const liveRemotes = useMemo(
-    () => remoteReadings.filter((remote) => remote.broadcasterUid !== viewerUid && clock - remote.updatedAt < BROADCAST_STALE_MS),
-    [remoteReadings, viewerUid, clock]
-  );
-  const activeRemote = selectedBroadcaster.id.startsWith("live-")
-    ? liveRemotes.find((remote) => `live-${remote.broadcasterUid}` === selectedBroadcaster.id)
+  // One card per broadcaster (newest session), excluding the viewer's own broadcast
+  const liveRemotes = useMemo(() => {
+    const newest = new Map<string, LiveSessionDoc>();
+    liveSessions
+      .filter((session) => session.ownerUid !== viewerUid && clock - (session.updatedAt ?? session.startedAt) < BROADCAST_STALE_MS)
+      .forEach((session) => {
+        const current = newest.get(session.ownerUid);
+        if (!current || session.startedAt > current.startedAt) newest.set(session.ownerUid, session);
+      });
+    return Array.from(newest.values()).sort((x, y) => y.startedAt - x.startedAt);
+  }, [liveSessions, viewerUid, clock]);
+  const activeSession = selectedBroadcaster.id.startsWith("live-")
+    ? liveRemotes.find((session) => `live-${session.ownerUid}` === selectedBroadcaster.id)
+    : undefined;
+  const activeRemote = activeSession
+    ? remoteReadings.find((reading) => reading.broadcasterUid === activeSession.ownerUid && clock - reading.updatedAt < BROADCAST_STALE_MS)
     : undefined;
   const remoteReadingCards: LiveReadingCard[] = (activeRemote?.cards ?? []).flatMap((entry) => {
     const card = TAROT_DECK.find((item) => item.id === entry.id && !item.isHidden);
     return card ? [{ card, isReversed: entry.reversed, isRevealed: entry.revealed }] : [];
   });
-  const visibleBroadcasters = [...initialBroadcasters, ...liveRemotes.map(toBroadcaster), ...(myBroadcaster ? [myBroadcaster] : [])]
+  const visibleBroadcasters = [...(myBroadcaster && isLiveNow ? [myBroadcaster] : []), ...liveRemotes.map(toBroadcaster)]
     .filter((broadcaster) => selectedTopic === "All" || broadcaster.topic === selectedTopic);
 
   // Real device-to-device video. The broadcaster's camera stays on while live, even when browsing other screens
-  const broadcastVideo = useLiveBroadcast(currentUserId, Boolean(currentUserId) && isLiveNow, isBroadcastPaused);
-  const viewerBroadcasterUid = screen === "viewer" ? activeRemote?.broadcasterUid ?? null : null;
+  const broadcastVideo = useLiveBroadcast(currentUserId, Boolean(currentUserId) && isLiveNow, isBroadcastPaused, myBroadcaster ? {
+    name: myBroadcaster.name.slice(0, 80),
+    avatar: myBroadcaster.avatar.slice(0, 8),
+    title: myBroadcaster.title.slice(0, 200),
+    description: (myBroadcaster.description ?? "").slice(0, 1000),
+    hashtags: (myBroadcaster.hashtags ?? "").slice(0, 300),
+    topic: myBroadcaster.topic
+  } : undefined);
+  const viewerBroadcasterUid = screen === "viewer" ? activeSession?.ownerUid ?? null : null;
   const viewerVideo = useLiveViewer(viewerBroadcasterUid, viewerUid, Boolean(viewerBroadcasterUid));
+
+  // Chat and hearts are shared through liveSessions/{sessionId}/events, scoped to the session being viewed
+  const activeEventsSessionId = screen === "broadcast" ? broadcastVideo.sessionId : screen === "viewer" ? viewerVideo.sessionId : null;
+  useEffect(() => {
+    if (!viewerUid || !activeEventsSessionId) return;
+    const seen = new Set<string>();
+    const listenStartedAt = Date.now() - 5000;
+    const unsubscribe = onSnapshot(query(eventsRef(activeEventsSessionId), orderBy("createdAt"), limitToLast(50)), (snapshot) => {
+      const lines: ChatLine[] = [];
+      snapshot.docChanges().forEach((change) => {
+        if (change.type !== "added" || seen.has(change.doc.id)) return;
+        seen.add(change.doc.id);
+        const data = change.doc.data();
+        if (typeof data.sender !== "string" || typeof data.text !== "string") return;
+        lines.push({ id: `event-${change.doc.id}`, sender: data.sender, text: data.text, kind: data.kind === "heart" || data.kind === "gift" || data.kind === "tip" ? "gift" : undefined });
+        // The broadcaster's gift total only counts new gifts from other people, never history or their own echo
+        if (screen === "broadcast" && data.kind === "gift" && data.uid !== viewerUid && typeof data.amount === "number" && data.createdAt >= listenStartedAt) {
+          setGiftsReceived((total) => total + data.amount);
+        }
+      });
+      if (lines.length) setChat((messages) => [...messages, ...lines]);
+    }, (error) => console.error("Failed to sync live chat:", error));
+    return unsubscribe;
+  }, [viewerUid, activeEventsSessionId, screen]);
+
+  const publishLiveEvent = (kind: "chat" | "heart" | "gift" | "tip", text: string, amount?: number) => {
+    if (!viewerUid || !activeEventsSessionId) {
+      setNotice("Live chat is still connecting. Try again in a moment.");
+      return false;
+    }
+    const eventId = (crypto.randomUUID?.() ?? `${Date.now()}${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9_-]/g, "");
+    setDoc(doc(eventsRef(activeEventsSessionId), eventId), {
+      uid: viewerUid,
+      sender: (displayName?.trim() || "Guest").slice(0, 80),
+      text: text.slice(0, 300),
+      kind,
+      ...(amount === undefined ? {} : { amount }),
+      createdAt: Date.now()
+    }).catch((error) => { console.error("Failed to send live event:", error); setNotice("Could not send. Please try again."); });
+    return true;
+  };
+
+  // Active broadcasts come from liveSessions (the same docs the video connection uses)
+  useEffect(() => {
+    if (!viewerUid) return;
+    const unsubscribe = onSnapshot(query(collection(db, "liveSessions"), where("status", "==", "live")), (snapshot) => {
+      setLiveSessions(snapshot.docs.map((item) => item.data() as LiveSessionDoc));
+    }, (error) => console.error("Failed to sync live sessions:", error));
+    return unsubscribe;
+  }, [viewerUid]);
 
   // Viewers receive every broadcaster's published Tarot state in real time
   useEffect(() => {
@@ -252,11 +329,11 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
 
   // A remote broadcast that stops publishing sends viewers back to Browse
   useEffect(() => {
-    if (screen === "viewer" && selectedBroadcaster.id.startsWith("live-") && !activeRemote) {
+    if (screen === "viewer" && selectedBroadcaster.id.startsWith("live-") && !activeSession) {
       setScreen("directory");
       setNotice("That broadcast has ended.");
     }
-  }, [screen, selectedBroadcaster.id, activeRemote]);
+  }, [screen, selectedBroadcaster.id, activeSession]);
 
   // Revoking Tarot Reader mid-broadcast removes any reading from the stream
   useEffect(() => {
@@ -269,10 +346,11 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       setNotice("Sign in to start a broadcast.");
       return;
     }
+    const chosenName = displayName?.trim();
     const newBroadcaster: Broadcaster = {
       id: "your-live",
-      name: readerProfile ? "Celestial Reader" : "Kertis Johnson",
-      avatar: readerProfile ? "CR" : "KJ",
+      name: chosenName || (readerProfile ? "Celestial Reader" : "Kertis Johnson"),
+      avatar: chosenName ? chosenName.slice(0, 2).toUpperCase() : readerProfile ? "CR" : "KJ",
       title: broadcastTitle.trim() || "A little time together in the Sanctuary",
       description: broadcastDescription.trim(),
       hashtags: broadcastHashtags.trim(),
@@ -310,9 +388,8 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       setNotice("Not enough Gems for this gift.");
       return;
     }
+    if (!publishLiveEvent("gift", `sent a ${gift.name} ${gift.emoji} — ${gift.gems} Gems`, gift.gems)) return;
     setViewerGems((balance) => balance - gift.gems);
-    setGiftsReceived((total) => total + gift.gems);
-    setChat((messages) => [...messages, { id: Date.now(), sender: "Kertis", text: `sent a ${gift.name} ${gift.emoji} — ${gift.gems} Gems`, kind: "gift" }]);
     setIsGiftSheetOpen(false);
     setNotice(`${gift.name} sent to ${selectedBroadcaster.name}`);
   };
@@ -326,13 +403,11 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     event.preventDefault();
     const message = chatInput.trim();
     if (!message) return;
-    setChat((messages) => [...messages, { id: Date.now(), sender: "Kertis", text: message }]);
-    setChatInput("");
+    if (publishLiveEvent("chat", message)) setChatInput("");
   };
 
   const showHeart = () => {
-    setNotice("Heart sent");
-    setChat((messages) => [...messages, { id: Date.now(), sender: "Kertis", text: "sent a heart 💗", kind: "gift" }]);
+    if (publishLiveEvent("heart", "sent a heart 💗")) setNotice("Heart sent");
   };
 
   const publishLiveReading = (cards: TarotCard[]) => {
@@ -406,12 +481,12 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   if (screen === "directory") {
     return (
       <section className="mx-auto min-h-[calc(100dvh-9rem)] max-w-2xl space-y-5 pb-5 text-slate-100">
-        <header className="flex items-center justify-between">{isLiveNow ? backButton(() => setScreen("broadcast"), "Back to your live broadcast") : backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
+        <header className="flex items-center justify-between">{isLiveNow ? backButton(() => { if (myBroadcaster) setSelectedBroadcaster(myBroadcaster); setScreen("broadcast"); }, "Back to your live broadcast") : backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
         {notice && <p role="status" className="rounded-lg border border-mystic-gold/30 bg-mystic-gold/10 px-3 py-2 text-center text-xs text-mystic-gold">{notice}</p>}
         <button onClick={() => setScreen("setup")} className="flex w-full items-center justify-between rounded-xl border border-mystic-gold/40 bg-gradient-to-r from-mystic-gold/15 to-transparent px-4 py-3 text-left"><span><strong className="block font-display text-sm text-mystic-gold">Go live</strong><span className="text-xs text-slate-400">Start a broadcast with your community</span></span><ChevronRight className="h-5 w-5 text-mystic-gold" /></button>
         <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator</button>}</div>
           <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"><button onClick={() => setSelectedTopic("All")} className={`shrink-0 rounded-full border px-3 py-2 text-xs ${selectedTopic === "All" ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}>All</button>{topics.map(({ name, icon: Icon }) => <button key={name} onClick={() => setSelectedTopic(name)} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs ${selectedTopic === name ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}><Icon className="h-3.5 w-3.5" />{name}</button>)}</div>
-          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); setIsFollowing(false); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
+          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); setIsFollowing(false); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
         </section>
       </section>
     );
@@ -449,7 +524,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         videoStatus={isBroadcaster ? broadcastVideo.status : viewerVideo.status}
         videoError={isBroadcaster ? broadcastVideo.error : ""}
         hasRealVideo={isBroadcaster ? Boolean(currentUserId) : Boolean(viewerBroadcasterUid)}
-        broadcaster={activeRemote ? toBroadcaster(activeRemote) : selectedBroadcaster}
+        broadcaster={isBroadcaster && myBroadcaster ? myBroadcaster : activeSession ? toBroadcaster(activeSession) : selectedBroadcaster}
         isBroadcaster={isBroadcaster}
         onBack={() => {
           if (isBroadcaster) {

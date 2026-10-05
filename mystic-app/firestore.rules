@@ -147,6 +147,16 @@ service cloud.firestore {
     // Live broadcast Tarot state: only a Tarot Reader/admin may publish their own; any signed-in viewer may read
     // Live video signaling (WebRTC offer/answer/ICE only; media never touches Firestore)
     match /liveSessions/{sessionId} {
+      function isValidLiveSessionMeta(data) {
+        return (!('name' in data) || (data.name is string && data.name.size() <= 80)) &&
+          (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 8)) &&
+          (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
+          (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+          (!('hashtags' in data) || (data.hashtags is string && data.hashtags.size() <= 300)) &&
+          (!('topic' in data) || (data.topic is string && data.topic.size() <= 40)) &&
+          (!('updatedAt' in data) || data.updatedAt is number);
+      }
+
       function isSessionOwner() {
         return isSignedIn() &&
           request.auth.token.firebase.sign_in_provider != 'anonymous' &&
@@ -157,20 +167,38 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.auth.token.firebase.sign_in_provider != 'anonymous' &&
         isValidId(sessionId) &&
-        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
         request.resource.data.keys().hasAll(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        isValidLiveSessionMeta(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.sessionId == sessionId &&
         request.resource.data.status == 'live' &&
         request.resource.data.startedAt is number;
       allow update: if isSessionOwner() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt']) &&
-        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
+        isValidLiveSessionMeta(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.sessionId == sessionId &&
         request.resource.data.status == 'live' &&
         request.resource.data.startedAt is number;
       allow delete: if isSessionOwner();
+
+      match /events/{eventId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() &&
+          exists(/databases/$(database)/documents/liveSessions/$(sessionId)) &&
+          isValidId(eventId) &&
+          request.resource.data.keys().hasOnly(['uid', 'sender', 'text', 'kind', 'amount', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['uid', 'sender', 'text', 'kind', 'createdAt']) &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.kind in ['chat', 'heart', 'gift', 'tip'] &&
+          (!('amount' in request.resource.data) || (request.resource.data.amount is number && request.resource.data.amount > 0 && request.resource.data.amount <= 100000)) &&
+          request.resource.data.sender is string && request.resource.data.sender.size() <= 80 &&
+          request.resource.data.text is string && request.resource.data.text.size() <= 300 &&
+          request.resource.data.createdAt is number;
+        allow delete: if isSessionOwner();
+      }
 
       match /viewers/{viewerId} {
         allow read: if isSessionOwner() || (isSignedIn() && resource.data.viewerUid == request.auth.uid);

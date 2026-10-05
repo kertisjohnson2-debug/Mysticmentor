@@ -20,6 +20,7 @@ import { db } from "../firebase";
  *   liveSessions/{sessionId}                       one doc per broadcast (ownerUid = broadcaster)
  *   liveSessions/{sessionId}/viewers/{viewerId}    one doc per viewer connection (offer/answer)
  *   liveSessions/{sessionId}/viewers/{viewerId}/candidates/{id}   ICE candidates
+ *   liveSessions/{sessionId}/events/{eventId}      chat messages and hearts shared by everyone in that session
  *
  * sessionId is random per broadcast (never the uid), so two sessions on one account cannot collide.
  * Viewers find the active session by querying ownerUid; viewerId is a per-connection id. The broadcaster keeps
@@ -49,9 +50,12 @@ export type LiveVideoStatus = "idle" | "requesting" | "live" | "connecting" | "c
 
 const sessionRef = (sessionId: string) => doc(db, "liveSessions", sessionId);
 const viewersRef = (sessionId: string) => collection(sessionRef(sessionId), "viewers");
+export const eventsRef = (sessionId: string) => collection(sessionRef(sessionId), "events");
 const candidatesRef = (sessionId: string, viewerId: string) => collection(doc(viewersRef(sessionId), viewerId), "candidates");
 
 async function clearViewers(sessionId: string) {
+  const events = await getDocs(eventsRef(sessionId)).catch(() => null);
+  if (events) await Promise.all(events.docs.map((item) => deleteDoc(item.ref).catch(() => undefined)));
   const viewers = await getDocs(viewersRef(sessionId));
   await Promise.all(viewers.docs.map(async (viewer) => {
     const candidates = await getDocs(candidatesRef(sessionId, viewer.id));
@@ -69,11 +73,20 @@ function sendCandidates(pc: RTCPeerConnection, sessionId: string, viewerId: stri
 }
 
 /** Broadcaster: captures camera/mic, publishes the session, and answers each viewer's offer. */
-export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean, paused: boolean) {
+export type LiveSessionMeta = { name: string; avatar: string; title: string; description: string; hashtags: string; topic: string };
+
+export const LIVE_SESSION_HEARTBEAT_MS = 30000;
+
+export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean, paused: boolean, meta?: LiveSessionMeta) {
+  const metaRef = useRef<LiveSessionMeta | undefined>(meta);
+  const sessionIdRef = useRef<string | null>(null);
+  metaRef.current = meta;
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [status, setStatus] = useState<LiveVideoStatus>("idle");
   const [error, setError] = useState("");
   const [viewerConnections, setViewerConnections] = useState(0);
+  const [publishedSessionId, setPublishedSessionId] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
@@ -86,6 +99,7 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
     const peers = new Map<string, { pc: RTCPeerConnection; unsubscribe?: Unsubscribe }>();
     let unsubscribeViewers: Unsubscribe | undefined;
     const sessionId = randomId();
+    let heartbeat: number | undefined;
 
     const closePeer = (viewerId: string) => {
       const peer = peers.get(viewerId);
@@ -124,13 +138,19 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
       setError("");
       let media: MediaStream;
       try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new DOMException("Camera API unavailable", "NotSupportedError");
         media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
       } catch (err) {
         if (cancelled) return;
+        const name = err instanceof DOMException ? err.name : "";
         setStatus("error");
-        setError(err instanceof DOMException && err.name === "NotAllowedError"
+        setError(name === "NotAllowedError"
           ? "Camera and microphone access was blocked. Allow access in your browser to share video."
-          : "Could not start your camera or microphone.");
+          : name === "NotSupportedError"
+            ? "This browser or connection can't access the camera. Open the app over https and try again."
+            : name === "NotFoundError"
+              ? "No camera or microphone was found on this device."
+              : "Could not start your camera or microphone.");
         return;
       }
       if (cancelled) { media.getTracks().forEach((track) => track.stop()); return; }
@@ -138,8 +158,13 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
       setStream(media);
 
       try {
-        await setDoc(sessionRef(sessionId), { ownerUid: broadcasterUid, sessionId, status: "live", startedAt: Date.now() });
+        await setDoc(sessionRef(sessionId), { ownerUid: broadcasterUid, sessionId, status: "live", startedAt: Date.now(), updatedAt: Date.now(), ...metaRef.current });
         if (cancelled) return;
+        sessionIdRef.current = sessionId;
+        setPublishedSessionId(sessionId);
+        heartbeat = window.setInterval(() => {
+          updateDoc(sessionRef(sessionId), { updatedAt: Date.now() }).catch(() => undefined);
+        }, LIVE_SESSION_HEARTBEAT_MS);
         setStatus("live");
         unsubscribeViewers = onSnapshot(viewersRef(sessionId), (snapshot) => {
           snapshot.docChanges().forEach((change) => {
@@ -158,6 +183,9 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
 
     return () => {
       cancelled = true;
+      window.clearInterval(heartbeat);
+      sessionIdRef.current = null;
+      setPublishedSessionId(null);
       unsubscribeViewers?.();
       Array.from(peers.keys()).forEach(closePeer);
       streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -169,7 +197,14 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
     };
   }, [enabled, broadcasterUid]);
 
-  return { stream, status, error, viewerConnections };
+  const metaKey = meta ? JSON.stringify(meta) : "";
+  useEffect(() => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId || !metaRef.current) return;
+    updateDoc(sessionRef(sessionId), { ...metaRef.current, updatedAt: Date.now() }).catch(() => undefined);
+  }, [metaKey]);
+
+  return { stream, status, error, viewerConnections, sessionId: publishedSessionId };
 }
 
 /** Viewer: joins the broadcaster's active session and receives the remote stream. */
@@ -253,5 +288,5 @@ export function useLiveViewer(broadcasterUid: string | null, viewerUid: string |
     };
   }, [enabled, broadcasterUid, viewerUid, sessionId]);
 
-  return { stream, status };
+  return { stream, status, sessionId };
 }
