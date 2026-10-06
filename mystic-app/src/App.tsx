@@ -221,7 +221,19 @@ export default function App() {
 
   // --- ZODIAC STATE ---
   const [selectedZodiac, setSelectedZodiac] = useState<ZodiacSign | null>(null);
-  const [zodiacDetailTab, setZodiacDetailTab] = useState<"general" | "love" | "career">("general");
+  const [dailyHoroscope, setDailyHoroscope] = useState<{ status: "idle" | "loading" | "ready" | "error"; date: string; text: string }>({ status: "idle", date: "", text: "" });
+  const [horoscopeRetry, setHoroscopeRetry] = useState(0);
+  const selectedZodiacId = selectedZodiac?.id;
+  useEffect(() => {
+    if (!selectedZodiacId) { setDailyHoroscope({ status: "idle", date: "", text: "" }); return; }
+    let cancelled = false;
+    setDailyHoroscope({ status: "loading", date: "", text: "" });
+    fetch(`/api/horoscope/daily?sign=${encodeURIComponent(selectedZodiacId)}`)
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`Status ${res.status}`)))
+      .then((data) => { if (!cancelled) setDailyHoroscope({ status: "ready", date: String(data.date), text: String(data.horoscope) }); })
+      .catch(() => { if (!cancelled) setDailyHoroscope({ status: "error", date: "", text: "" }); });
+    return () => { cancelled = true; };
+  }, [selectedZodiacId, horoscopeRetry]);
 
   // --- NUMEROLOGY STATE ---
   const [dobMonth, setDobMonth] = useState("01");
@@ -2123,7 +2135,6 @@ export default function App() {
                     key={sign.id}
                     onClick={() => {
                       setSelectedZodiac(sign);
-                      setZodiacDetailTab("general");
                       playCelestialSound("success");
                     }}
                     className={`p-3 rounded-xl border flex flex-col items-center text-center transition-all cursor-pointer ${
@@ -2194,30 +2205,29 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Segmented Horoscope Tabs */}
-                  <div className="flex p-1 bg-[#0b081c] rounded-lg border border-[#2c1654]/50">
-                    {(["general", "love", "career"] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => { setZodiacDetailTab(tab); playCelestialSound("flip"); }}
-                        className={`flex-1 py-1.5 text-center text-[10px] font-semibold tracking-wider uppercase rounded-md transition-all ${
-                          zodiacDetailTab === tab
-                            ? "bg-mystic-gold text-[#070412] shadow"
-                            : "text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Tab Horoscope Content */}
+                  {/* Today's Reading (live API) */}
                   <div className="space-y-2">
-                    <p className="text-xs text-slate-200 leading-relaxed">
-                      {zodiacDetailTab === "general" && selectedZodiac.horoscope.general}
-                      {zodiacDetailTab === "love" && selectedZodiac.horoscope.love}
-                      {zodiacDetailTab === "career" && selectedZodiac.horoscope.career}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold tracking-wider uppercase text-mystic-gold">
+                        {dailyHoroscope.status === "ready" ? `Today's Reading — ${(() => { const d = new Date(`${dailyHoroscope.date}T12:00:00`); return Number.isNaN(d.getTime()) ? dailyHoroscope.date : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }); })()}` : "Today's Reading"}
+                      </span>
+                      <span className="flex items-center gap-1 text-[9px] text-teal-300 font-medium shrink-0">
+                        <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                        Updated daily
+                      </span>
+                    </div>
+                    {dailyHoroscope.status === "loading" && (
+                      <p role="status" className="text-xs text-slate-400 animate-pulse">Consulting the stars…</p>
+                    )}
+                    {dailyHoroscope.status === "error" && (
+                      <p role="alert" className="text-xs text-slate-300">
+                        Today's horoscope couldn't be loaded.{" "}
+                        <button onClick={() => setHoroscopeRetry((n) => n + 1)} className="text-mystic-gold underline">Try again</button>
+                      </p>
+                    )}
+                    {dailyHoroscope.status === "ready" && (
+                      <p className="text-xs text-slate-200 leading-relaxed">{dailyHoroscope.text}</p>
+                    )}
                   </div>
 
                   {/* Traits List (Unboxed metadata list) */}

@@ -90,6 +90,37 @@ async function startServer() {
   // --- PARSE JSON FOR STANDARD API ENDPOINTS ---
   app.use(express.json());
 
+  // --- API: DAILY HOROSCOPE (proxy + cache; upstream has no CORS) ---
+  const HOROSCOPE_SIGNS = ["aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"];
+  const HOROSCOPE_RECHECK_MS = 30 * 60 * 1000;
+  const horoscopeCache = new Map<string, { date: string; horoscope: string; fetchedAt: number }>();
+
+  app.get("/api/horoscope/daily", async (req, res) => {
+    const sign = typeof req.query.sign === "string" ? req.query.sign.toLowerCase() : "";
+    if (!HOROSCOPE_SIGNS.includes(sign)) {
+      return res.status(400).json({ error: "Invalid zodiac sign." });
+    }
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const cached = horoscopeCache.get(sign);
+    // Reuse only while the reading is for today (UTC) or was fetched very recently
+    if (cached && (cached.date === todayUtc || Date.now() - cached.fetchedAt < HOROSCOPE_RECHECK_MS)) {
+      return res.json({ sign, date: cached.date, horoscope: cached.horoscope, cached: true });
+    }
+    try {
+      const upstream = await fetch(`https://freehoroscopeapi.com/api/v1/get-horoscope/daily?sign=${encodeURIComponent(sign)}`, { signal: AbortSignal.timeout(8000) });
+      if (!upstream.ok) throw new Error(`Upstream status ${upstream.status}`);
+      const body: any = await upstream.json();
+      const date = body?.data?.date;
+      const horoscope = body?.data?.horoscope;
+      if (typeof date !== "string" || typeof horoscope !== "string" || !horoscope.trim()) throw new Error("Unexpected upstream response");
+      horoscopeCache.set(sign, { date, horoscope, fetchedAt: Date.now() });
+      return res.json({ sign, date, horoscope, cached: false });
+    } catch (err: any) {
+      console.error("[Horoscope API] fetch failed:", err.message);
+      return res.status(502).json({ error: "Could not load today's horoscope. Please try again shortly." });
+    }
+  });
+
   // --- API: CREATE CHEKOUT SESSION (GEMS PURCHASE) ---
   app.post("/api/create-gem-checkout-session", async (req, res) => {
     const { userId, packageId, cost, gemsAmount } = req.body;
