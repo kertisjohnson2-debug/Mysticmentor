@@ -37,22 +37,46 @@ if (getApps().length === 0) {
 
 // Bind to the exact named Firestore Database ID allocated for this workspace applet
 export const db = getFirestore(getApps()[0], firebaseConfig.firestoreDatabaseId);
+export function getDb() {
+  return db;
+}
 
 // --- STRIPE INITIALIZATION ---
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
 const isStripeConfigured = !!STRIPE_SECRET_KEY;
+const isProduction = process.env.NODE_ENV === "production";
 const stripe = isStripeConfigured
-  ? new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: "2025-01-27.acerc" as any, // Set to standard modern API version
-    })
+  ? new Stripe(STRIPE_SECRET_KEY)
   : (null as unknown as Stripe);
+
+// Server-side source of truth for Gem packages. Client-supplied cost/gems are never trusted.
+const GEM_PACKAGES: Record<string, { gems: number; cost: number }> = {
+  gems_500: { gems: 500, cost: 4.99 },
+  gems_1200: { gems: 1200, cost: 9.99 },
+};
+
+function isLocalHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const cleanHost = host.split(":")[0];
+  return cleanHost === "localhost" || cleanHost === "127.0.0.1" || cleanHost === "::1" || cleanHost.endsWith(".local");
+}
+
+// Simulation is allowed only outside production, on a local host, and when explicitly enabled.
+function isSimulationAllowed(host: string | undefined): boolean {
+  return !isProduction && process.env.ENABLE_WEBHOOK_SIMULATION === "true" && isLocalHost(host);
+}
 
 if (isStripeConfigured) {
   console.log("[Stripe Backend] Initialized with real API keys.");
+} else if (isProduction) {
+  console.error("[Stripe Backend] STRIPE_SECRET_KEY is missing in production. Gem checkout is disabled.");
 } else {
-  console.log("[Stripe Backend] API keys not found. Running in high-fidelity Stripe Sandbox Simulator mode.");
+  console.log("[Stripe Backend] API keys not found. Local development simulator available only with ENABLE_WEBHOOK_SIMULATION=true.");
+}
+if (isProduction && isStripeConfigured && !STRIPE_WEBHOOK_SECRET) {
+  console.error("[Stripe Backend] STRIPE_WEBHOOK_SECRET is missing in production. Webhooks will be rejected.");
 }
 
 async function startServer() {
@@ -65,13 +89,15 @@ async function startServer() {
 
     try {
       if (isStripeConfigured && STRIPE_WEBHOOK_SECRET) {
+        if (!sig) throw new Error("Missing stripe-signature header");
         event = stripe.webhooks.constructEvent(req.body, sig as string, STRIPE_WEBHOOK_SECRET);
-      } else {
-        // Fallback or Parse simulated webhook payload
-        const rawBody = req.body.toString("utf-8");
-        const parsed = JSON.parse(rawBody);
-        event = parsed as Stripe.Event;
+      } else if (isSimulationAllowed(req.hostname)) {
+        // Local development only: unsigned simulated payload
+        event = JSON.parse(req.body.toString("utf-8")) as Stripe.Event;
         console.log("[Stripe Simulator Webhook] Received simulated webhook event:", event.type);
+      } else {
+        console.error("[Stripe Webhook Error] Webhook secret not configured; rejecting unsigned event.");
+        return res.status(503).send("Webhook endpoint is not configured.");
       }
     } catch (err: any) {
       console.error("[Stripe Webhook Error] Signature verification failed:", err.message);
@@ -121,19 +147,38 @@ async function startServer() {
     }
   });
 
-  // --- API: CREATE CHEKOUT SESSION (GEMS PURCHASE) ---
+  // --- API: CREATE CHECKOUT SESSION (GEMS PURCHASE) ---
   app.post("/api/create-gem-checkout-session", async (req, res) => {
-    const { userId, packageId, cost, gemsAmount } = req.body;
+    const { packageId } = req.body || {};
 
-    if (!userId || !packageId || !cost || !gemsAmount) {
-      return res.status(400).json({ error: "Missing required parameters: userId, packageId, cost, gemsAmount" });
+    if (!isStripeConfigured && !isSimulationAllowed(req.hostname)) {
+      console.error("[Create Checkout Session] Stripe is not configured; refusing to create checkout.");
+      return res.status(503).json({ error: "Payments are not configured on this server." });
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.length <= 7) {
+      return res.status(401).json({ error: "Missing or invalid authorization header" });
+    }
+
+    // Trusted package definition only; client cost/gemsAmount are ignored.
+    const pkg = typeof packageId === "string" && Object.prototype.hasOwnProperty.call(GEM_PACKAGES, packageId)
+      ? GEM_PACKAGES[packageId]
+      : undefined;
+    if (!pkg) {
+      return res.status(400).json({ error: "Invalid gem package." });
     }
 
     try {
+      const decodedToken = await getAuth().verifyIdToken(authHeader.substring(7));
+      const userId = decodedToken.uid;
       const transactionId = "tx_sess_" + crypto.randomUUID();
 
       if (isStripeConfigured) {
-        // Create actual Stripe Checkout Session
+        const baseUrl = (process.env.APP_URL || (req.headers.origin as string) || "").replace(/\/$/, "");
+        if (!baseUrl) {
+          return res.status(500).json({ error: "Application URL is not configured." });
+        }
         const session = await stripe.checkout.sessions.create({
           payment_method_types: ["card"],
           line_items: [
@@ -141,36 +186,37 @@ async function startServer() {
               price_data: {
                 currency: "usd",
                 product_data: {
-                  name: `Celestial Gems - ${gemsAmount} Pack`,
+                  name: `Celestial Gems - ${pkg.gems} Pack`,
                   description: `Unlock animated virtual gifts, tipping, and deep reading guides inside Celestial Sanctuary.`,
                 },
-                unit_amount: Math.round(cost * 100), // cost in cents
+                unit_amount: Math.round(pkg.cost * 100),
               },
               quantity: 1,
             },
           ],
           mode: "payment",
-          success_url: `${req.headers.origin}/dashboard?payment=success&tx=${transactionId}`,
-          cancel_url: `${req.headers.origin}/dashboard?payment=cancel`,
+          client_reference_id: userId,
+          success_url: `${baseUrl}/dashboard?payment=success&tx=${transactionId}`,
+          cancel_url: `${baseUrl}/dashboard?payment=cancel`,
           metadata: {
             userId,
             packageId,
-            gemsAmount: gemsAmount.toString(),
-            cost: cost.toString(),
+            gemsAmount: pkg.gems.toString(),
+            cost: pkg.cost.toString(),
             type: "gem_purchase",
             transactionId,
           },
         });
 
         return res.json({ url: session.url, sessionId: session.id, simulated: false });
-      } else {
-        // Return simulated checkout URL
-        const simulatedUrl = `/stripe-sandbox-checkout?session_id=${transactionId}&userId=${userId}&gemsAmount=${gemsAmount}&cost=${cost}&packageId=${packageId}`;
-        return res.json({ url: simulatedUrl, sessionId: transactionId, simulated: true });
       }
+
+      // Local development simulator (guarded above by isSimulationAllowed)
+      const simulatedUrl = `/stripe-sandbox-checkout?session_id=${transactionId}&userId=${userId}&gemsAmount=${pkg.gems}&cost=${pkg.cost}&packageId=${packageId}`;
+      return res.json({ url: simulatedUrl, sessionId: transactionId, simulated: true });
     } catch (error: any) {
       console.error("[Create Checkout Session Error]:", error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: "Could not create checkout session." });
     }
   });
 
@@ -436,24 +482,12 @@ async function startServer() {
     }
   });
 
-  // Helper to verify if a hostname corresponds to a local environment
-  const isLocalHost = (host: string | undefined): boolean => {
-    if (!host) return false;
-    const cleanHost = host.split(":")[0];
-    return (
-      cleanHost === "localhost" ||
-      cleanHost === "127.0.0.1" ||
-      cleanHost === "::1" ||
-      cleanHost.endsWith(".local")
-    );
-  };
-
   // --- API: POST SIMULATE WEBHOOK SUCCESS (Used by Dev Simulator UI) ---
   app.post("/api/simulate-webhook-success", async (req, res) => {
     // 1. Strict Environment Locking:
     // Reject requests if we are in a production or staging environment.
     // Cloud run deployments run under process.env.NODE_ENV === "production" and are on non-local domains.
-    const isProductionOrStaging = process.env.NODE_ENV === "production" || !isLocalHost(req.hostname);
+    const isProductionOrStaging = isProduction || !isLocalHost(req.hostname);
     if (isProductionOrStaging) {
       return res.status(403).json({ 
         error: "Simulation endpoint is strictly disabled in production and publicly accessible staging environments." 
@@ -486,12 +520,7 @@ async function startServer() {
     }
 
     // Never trust client-supplied gemsAmount or cost; retrieve from trusted packages configuration
-    const trustedPackages: Record<string, { gems: number; cost: number }> = {
-      gems_500: { gems: 500, cost: 4.99 },
-      gems_1200: { gems: 1200, cost: 9.99 }
-    };
-
-    const pkg = trustedPackages[packageId as string];
+    const pkg = Object.prototype.hasOwnProperty.call(GEM_PACKAGES, packageId) ? GEM_PACKAGES[packageId as string] : undefined;
     if (!pkg) {
       return res.status(400).json({ error: "Invalid or untrusted package ID" });
     }
@@ -588,9 +617,37 @@ export async function processStripeEvent(event: Stripe.Event) {
     const metadata = session.metadata || {};
 
     if (metadata.type === "gem_purchase") {
-      const { userId, gemsAmount, cost, packageId, transactionId } = metadata;
-      const numGems = parseInt(gemsAmount, 10);
-      const rawCost = parseFloat(cost);
+      const { userId, packageId, gemsAmount, transactionId } = metadata;
+      const sessionId: string = session.id;
+
+      // Validate against the server-side trusted package table; metadata amounts are never credited blindly.
+      const pkg = typeof packageId === "string" && Object.prototype.hasOwnProperty.call(GEM_PACKAGES, packageId)
+        ? GEM_PACKAGES[packageId]
+        : undefined;
+      if (!pkg) {
+        throw new Error(`[Stripe Security] Unknown gem package in webhook: ${packageId}`);
+      }
+      if (typeof userId !== "string" || !userId || userId.includes("/")) {
+        throw new Error("[Stripe Security] Invalid userId in webhook metadata.");
+      }
+      if (typeof transactionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(transactionId)) {
+        throw new Error("[Stripe Security] Invalid transactionId in webhook metadata.");
+      }
+      if (typeof sessionId !== "string" || !/^[A-Za-z0-9_-]{1,255}$/.test(sessionId)) {
+        throw new Error("[Stripe Security] Invalid checkout session id.");
+      }
+      if (session.payment_status !== "paid") {
+        console.log(`[Stripe Security] Session ${sessionId} not paid (status: ${session.payment_status}); not crediting.`);
+        return;
+      }
+      if (parseInt(gemsAmount, 10) !== pkg.gems) {
+        throw new Error("[Stripe Security] Webhook gemsAmount does not match trusted package.");
+      }
+      if (session.amount_total !== undefined && session.amount_total !== null && session.amount_total !== Math.round(pkg.cost * 100)) {
+        throw new Error("[Stripe Security] Webhook amount_total does not match trusted package price.");
+      }
+      const numGems = pkg.gems;
+      const rawCost = pkg.cost;
 
       console.log(`[Stripe Secure Success] Initiating atomic transaction for User: ${userId}, Gems: ${numGems}, Session: ${transactionId}`);
 
@@ -604,7 +661,13 @@ export async function processStripeEvent(event: Stripe.Event) {
           return;
         }
 
-        // 2. Prevent duplicate credit for the exact checkout session/transaction ID
+        // 2. Prevent duplicate credit for the same Stripe session / transaction ID
+        const sessionLogRef = db.collection("processed_stripe_sessions").doc(sessionId);
+        const sessionLogSnap = await transaction.get(sessionLogRef);
+        if (sessionLogSnap.exists) {
+          console.log(`[Stripe Security] Session duplicate blocked: ${sessionId}`);
+          return;
+        }
         const globalTxRef = db.collection("financial_records").doc(transactionId);
         const globalTxSnap = await transaction.get(globalTxRef);
 
@@ -637,6 +700,14 @@ export async function processStripeEvent(event: Stripe.Event) {
           processedAt: new Date().toISOString(),
         });
 
+        transaction.set(sessionLogRef, {
+          sessionId,
+          eventId,
+          transactionId,
+          userId,
+          processedAt: new Date().toISOString(),
+        });
+
         // Credit Wallet Balance securely server-side
         transaction.update(userRef, {
           gemBalance: currentBalance + numGems,
@@ -653,6 +724,7 @@ export async function processStripeEvent(event: Stripe.Event) {
           cashAmount: rawCost,
           description: `Stripe Gems Credit Recharge (+${numGems} Gems)`,
           packageId,
+          stripeSessionId: sessionId,
           createdAt: new Date().toISOString(),
           status: "completed",
         });
@@ -664,6 +736,8 @@ export async function processStripeEvent(event: Stripe.Event) {
           userId,
           gemsAmount: numGems,
           amount: rawCost,
+          packageId,
+          stripeSessionId: sessionId,
           status: "completed",
           createdAt: new Date().toISOString()
         });

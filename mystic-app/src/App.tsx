@@ -1111,9 +1111,10 @@ export default function App() {
     }
     try {
       playCelestialSound("success");
+      const idToken = await auth.currentUser?.getIdToken();
       const res = await fetch("/api/create-gem-checkout-session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + idToken },
         body: JSON.stringify({
           userId: currentUser.uid,
           packageId,
@@ -1125,7 +1126,7 @@ export default function App() {
       if (data.url) {
         window.location.href = data.url; // redirects to Stripe or Sandbox Simulator checkout!
       } else {
-        alert("Failed to establish checkout portal. Please try again.");
+        alert(data.error || "Failed to establish checkout portal. Please try again.");
       }
     } catch (err) {
       console.error("Gem purchase error:", err);
