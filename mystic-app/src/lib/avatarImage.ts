@@ -41,3 +41,23 @@ export async function createAvatarDataUrl(file: File): Promise<string> {
   }
   throw new Error("This photo is too detailed to shrink to an avatar. Please choose a different photo.");
 }
+
+// Small square thumbnail for public Live session metadata; the full profile photo stays private to the user doc.
+export async function createLiveAvatarThumbnail(source: string): Promise<string> {
+  if (!source.startsWith("data:image/")) return source.length <= 2000 ? source : "";
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("Avatar could not be read."));
+    element.src = source;
+  });
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  const crop = Math.min(image.width, image.height);
+  context.drawImage(image, (image.width - crop) / 2, (image.height - crop) / 2, crop, crop, 0, 0, size, size);
+  return canvas.toDataURL("image/jpeg", 0.7);
+}

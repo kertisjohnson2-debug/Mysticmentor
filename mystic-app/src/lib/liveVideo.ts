@@ -73,7 +73,7 @@ function sendCandidates(pc: RTCPeerConnection, sessionId: string, viewerId: stri
 }
 
 /** Broadcaster: captures camera/mic, publishes the session, and answers each viewer's offer. */
-export type LiveSessionMeta = { name: string; avatar: string; title: string; description: string; hashtags: string; topic: string };
+export type LiveSessionMeta = { name: string; avatar: string; avatarUrl: string; title: string; description: string; hashtags: string; topic: string };
 
 export const LIVE_SESSION_HEARTBEAT_MS = 30000;
 
@@ -242,7 +242,7 @@ export function useLiveViewer(broadcasterUid: string | null, viewerUid: string |
     pc.addTransceiver("audio", { direction: "recvonly" });
     pc.ontrack = (event) => {
       remote.addTrack(event.track);
-      setStream(remote);
+      setStream(new MediaStream(remote.getTracks()));
     };
     pc.onconnectionstatechange = () => {
       if (cancelled) return;

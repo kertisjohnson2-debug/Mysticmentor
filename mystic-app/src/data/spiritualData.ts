@@ -1,3 +1,4 @@
+import { TAROT_INTERPRETATIONS } from "./tarotInterpretations";
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -375,7 +376,7 @@ const MINOR_ARCANA: TarotCard[] = [
   { id: 77, name: "King of Pentacles", number: "King", iconName: "Gem", uprightKeywords: ["Prosperity", "Stewardship", "Responsible leadership"], reversedKeywords: ["Greed", "Control", "Material insecurity"], uprightMeaning: "Experience and sound stewardship can create durable prosperity. Lead responsibly, honor your commitments, and measure success by the stability and well-being your resources make possible.", reversedMeaning: "Fear of losing status or wealth may lead to greed, excessive control, or risky displays of security. Material success is hollow if it depends on exploiting others.", description: "Mature stewardship sustains prosperity by combining practical judgment with responsibility to others.", advice: "Review a financial or leadership choice for long-term fairness, not just immediate gain." }
 ];
 
-export const TAROT_DECK: TarotCard[] = [...MAJOR_ARCANA, ...MINOR_ARCANA];
+export const TAROT_DECK: TarotCard[] = [...MAJOR_ARCANA, ...MINOR_ARCANA].map((card) => ({ ...card, ...TAROT_INTERPRETATIONS[card.id] }));
 
 export const ZODIAC_SIGNS: ZodiacSign[] = [
   {
