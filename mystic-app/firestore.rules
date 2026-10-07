@@ -95,6 +95,8 @@ service cloud.firestore {
         // Prevent normal users from self-assigning admin roles during creation
         request.resource.data.role == "member" || (request.resource.data.role == "admin" && request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true)
       ) && request.resource.data.get('tarotReader', false) == false
+        && request.resource.data.gemBalance == 0
+        && request.resource.data.cloutPoints == 0
         && request.resource.data.get('lifetimeGemsReceived', 0) == 0;
       allow update: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data) && (
         // Standard users cannot change their own gem balances, clout points, or roles!

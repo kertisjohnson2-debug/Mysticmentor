@@ -93,6 +93,17 @@ const COSMIC_BACKDROP = "/src/assets/images/cosmic_tarot_backdrop_1790704955137.
 const CARD_BACK_IMG = "/src/assets/images/mystical_card_back_1790704964638.jpg";
 const TAROT_READER_IMG = "/src/assets/images/mystical_tarot_reader_1790704974614.jpg";
 
+async function ensureServerProfile(user: { getIdToken: () => Promise<string> }, displayName?: string | null): Promise<any | null> {
+  const token = await user.getIdToken();
+  const response = await fetch("/api/init-profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ displayName: displayName || "" })
+  });
+  if (!response.ok) throw new Error(`Profile initialization failed (${response.status})`);
+  return (await response.json()).profile ?? null;
+}
+
 export default function App() {
   const queryParams = new URLSearchParams(window.location.search);
   const isSandboxCheckoutPath = window.location.pathname === "/stripe-sandbox-checkout";
@@ -408,18 +419,9 @@ export default function App() {
         try {
           const docSnap = await getDoc(userDocRef);
           if (!docSnap.exists()) {
-            const defaultProfile = {
-              uid: user.uid,
-              email: user.email || "",
-              displayName: user.displayName || authDisplayName || user.email?.split("@")[0] || "Celestial Member",
-              role: user.email === "kertisjohnson7@gmail.com" ? "admin" : "member",
-              gemBalance: 850,
-              cloutPoints: 0,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            await setDoc(userDocRef, defaultProfile);
-            setDbUserDoc(defaultProfile);
+            // The server creates the profile with the trusted starting balance
+            const created = await ensureServerProfile(user, user.displayName || authDisplayName);
+            if (created) setDbUserDoc(created);
           } else {
             setDbUserDoc(docSnap.data());
           }
@@ -666,20 +668,15 @@ export default function App() {
           displayName: authDisplayName.trim()
         });
         
-        // Explicitly trigger user profile setDoc
-        const userDocRef = doc(db, "users", userCred.user.uid);
-        const profile = {
-          uid: userCred.user.uid,
-          email: userCred.user.email || "",
-          displayName: authDisplayName.trim(),
-          role: userCred.user.email === "kertisjohnson7@gmail.com" ? "admin" : "member",
-          gemBalance: 850,
-          cloutPoints: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        await setDoc(userDocRef, profile);
-        setDbUserDoc(profile);
+        // Profile (and starting balance) is created by the server; the name is a non-sensitive field
+        const created = await ensureServerProfile(userCred.user, authDisplayName.trim());
+        if (created) {
+          if (created.displayName !== authDisplayName.trim()) {
+            await updateDoc(doc(db, "users", userCred.user.uid), { displayName: authDisplayName.trim(), updatedAt: new Date().toISOString() });
+            created.displayName = authDisplayName.trim();
+          }
+          setDbUserDoc(created);
+        }
         setAuthSuccessMsg("Account registered successfully! Welcome to the Circle.");
       }
     } catch (err: any) {

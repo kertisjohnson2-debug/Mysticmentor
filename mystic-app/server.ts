@@ -168,6 +168,41 @@ async function startServer() {
     }
   };
 
+  // Creates the member's profile once with the trusted starting balance; never touches an existing profile
+  const STARTING_GEM_BALANCE = 850;
+  app.post("/api/init-profile", async (req, res) => {
+    const uid = await authenticateMember(req, res);
+    if (!uid) return;
+    try {
+      const authUser = await getAuth().getUser(uid);
+      const requestedName = typeof req.body?.displayName === "string" ? req.body.displayName.trim().slice(0, 100) : "";
+      const email = authUser.email || "";
+      const isAdminEmail = email === "kertisjohnson7@gmail.com" && authUser.emailVerified === true;
+      const userRef = db.collection("users").doc(uid);
+      const profile = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(userRef);
+        if (snap.exists) return snap.data();
+        const now = new Date().toISOString();
+        const created = {
+          uid,
+          email,
+          displayName: requestedName || authUser.displayName || email.split("@")[0] || "Celestial Member",
+          role: isAdminEmail ? "admin" : "member",
+          gemBalance: STARTING_GEM_BALANCE,
+          cloutPoints: 0,
+          createdAt: now,
+          updatedAt: now
+        };
+        transaction.create(userRef, created);
+        return created;
+      });
+      return res.json({ success: true, profile });
+    } catch (error) {
+      console.error("init-profile failed:", error);
+      return res.status(500).json({ error: "Could not initialize profile" });
+    }
+  });
+
   app.post("/api/notify-follow", async (req, res) => {
     const followerUid = await authenticateMember(req, res);
     if (!followerUid) return;
