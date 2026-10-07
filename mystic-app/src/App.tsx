@@ -2445,6 +2445,7 @@ export default function App() {
           {/* ==================== 5. LIVE ROOM VIEW ==================== */}
           {activeTab === "live" && (
             <LiveCommunity
+              gemBalance={typeof dbUserDoc?.gemBalance === "number" ? dbUserDoc.gemBalance : 0}
               onExit={() => setActiveTab("home")}
               isAuthorizedReader={hasTarotReaderPermission}
               currentUserId={currentUser?.uid ?? null}

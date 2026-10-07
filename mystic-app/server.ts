@@ -439,10 +439,11 @@ async function startServer() {
       return res.status(401).json({ error: "Missing ID token" });
     }
 
-    const { giftId, recipientId } = req.body;
+    const { giftId, recipientId, context, sessionId } = req.body;
     if (!giftId || !recipientId) {
       return res.status(400).json({ error: "Missing required parameters: giftId, recipientId" });
     }
+    const isLiveGift = context === "live";
 
     // Verify gift cost from trusted server-side template
     const giftCostMap: Record<string, number> = {
@@ -452,16 +453,31 @@ async function startServer() {
       feather: 100,
       star: 200
     };
+    // Live room gifts; the cost always comes from this table, never from the client
+    const liveGiftCostMap: Record<string, number> = {
+      heart: 10,
+      star: 50,
+      rose: 100,
+      crystal: 250,
+      teddy: 500
+    };
 
-    const giftCost = giftCostMap[giftId as string];
-    if (giftCost === undefined) {
+    const giftCost = (isLiveGift ? liveGiftCostMap : giftCostMap)[giftId as string];
+    if (giftCost === undefined || !Object.prototype.hasOwnProperty.call(isLiveGift ? liveGiftCostMap : giftCostMap, giftId as string)) {
       return res.status(400).json({ error: "Invalid gift ID" });
+    }
+    if (isLiveGift && (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId) || typeof recipientId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(recipientId))) {
+      return res.status(400).json({ error: "Invalid live gift parameters" });
     }
 
     try {
       // Verify Firebase ID Token securely on the server
       const decodedToken = await getAuth().verifyIdToken(idToken);
       const authenticatedUid = decodedToken.uid;
+
+      if (isLiveGift && (recipientId === authenticatedUid || decodedToken.firebase?.sign_in_provider === "anonymous")) {
+        return res.status(400).json({ error: "Live gifts must come from a signed-in member to another broadcaster" });
+      }
 
       const userRef = db.collection("users").doc(authenticatedUid);
       let successResponse = {};
@@ -471,6 +487,25 @@ async function startServer() {
         const userSnap = await transaction.get(userRef);
         if (!userSnap.exists) {
           throw new Error("User document not found in Firestore");
+        }
+
+        // Live gifts credit the broadcaster only when the session is genuinely live and owned by the recipient
+        const recipientRef = isLiveGift ? db.collection("users").doc(recipientId as string) : null;
+        const statsRef = isLiveGift ? db.collection("broadcasterStats").doc(recipientId as string) : null;
+        let recipientLifetime = 0;
+        if (isLiveGift && recipientRef) {
+          const [sessionSnap, recipientSnap] = await Promise.all([
+            transaction.get(db.collection("liveSessions").doc(sessionId as string)),
+            transaction.get(recipientRef)
+          ]);
+          const session = sessionSnap.data();
+          if (!session || session.ownerUid !== recipientId || session.status !== "live") {
+            throw new Error("Live session is not active for this broadcaster");
+          }
+          if (!recipientSnap.exists) {
+            throw new Error("Recipient User document not found in Firestore");
+          }
+          recipientLifetime = Number(recipientSnap.data()?.lifetimeGemsReceived) || 0;
         }
 
         const uData = userSnap.data() || {};
@@ -488,8 +523,15 @@ async function startServer() {
           updatedAt: new Date().toISOString(),
         });
 
+        // 1b. Credit the broadcaster's lifetime total in the same transaction (server-confirmed spend only)
+        if (isLiveGift && recipientRef && statsRef) {
+          const lifetimeGemsReceived = recipientLifetime + giftCost;
+          transaction.update(recipientRef, { lifetimeGemsReceived });
+          transaction.set(statsRef, { lifetimeGemsReceived, updatedAt: Date.now() });
+        }
+
         // 2. Record immutable transaction safely in User's subcollection ledger
-        const transactionId = "tx_spend_" + Date.now();
+        const transactionId = "tx_spend_" + Date.now() + (isLiveGift ? "_" + crypto.randomBytes(4).toString("hex") : "");
         const ledgerRef = userRef.collection("transactions").doc(transactionId);
         transaction.set(ledgerRef, {
           id: transactionId,
@@ -525,7 +567,7 @@ async function startServer() {
     } catch (error: any) {
       console.error("[Spend Gems Error]:", error);
       const errMsg = error.message || String(error);
-      if (errMsg.includes("Insufficient gem balance") || errMsg.includes("User document not found")) {
+      if (errMsg.includes("Insufficient gem balance") || errMsg.includes("User document not found") || errMsg.includes("Live session is not active")) {
         return res.status(400).json({ error: errMsg });
       }
       return res.status(401).json({ error: "Unauthorized access or validation failure" });

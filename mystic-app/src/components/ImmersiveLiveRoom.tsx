@@ -60,7 +60,6 @@ type Broadcaster = {
   viewers: number;
   theme: string;
   image?: string;
-  lifetimeGems: number;
 };
 
 type ChatLine = { id: number | string; sender: string; text: string; kind?: "gift" | "system" };

@@ -50,7 +50,6 @@ type Broadcaster = {
   theme: string;
   image?: string;
   avatarUrl?: string;
-  lifetimeGems: number;
 };
 
 type RemoteReading = {
@@ -87,13 +86,13 @@ const topics: { name: LiveTopic; icon: typeof Sparkles }[] = [
 ];
 
 const initialBroadcasters: Broadcaster[] = [
-  { id: "aster", name: "Aster Vale", avatar: "AV", title: "A gentle reading for the week ahead", topic: "Tarot & Spirituality", viewers: 742, theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]", image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg", lifetimeGems: 26800 },
-  { id: "fern", name: "Fern Hollow", avatar: "FH", title: "Repotting my moon garden", topic: "Plants & Gardening", viewers: 186, theme: "from-[#163b32] via-[#416b50] to-[#a0a85b]", lifetimeGems: 840 },
-  { id: "nia", name: "Nia Reads", avatar: "NR", title: "Quiet chapters & rainy-day tea", topic: "Books", viewers: 319, theme: "from-[#4a2534] via-[#874957] to-[#d29b74]", lifetimeGems: 6120 },
-  { id: "miso", name: "Miso & Jun", avatar: "MJ", title: "The kittens discovered the stream", topic: "Pets", viewers: 1204, theme: "from-[#593d2c] via-[#b27a47] to-[#e4c38d]", lifetimeGems: 1550 },
-  { id: "pixel", name: "PixelWitch", avatar: "PW", title: "Cozy quest, no spoilers", topic: "Gaming", viewers: 528, theme: "from-[#222d59] via-[#6153a0] to-[#c56d9b]", lifetimeGems: 52800 },
-  { id: "sol", name: "Sol Strings", avatar: "SS", title: "Acoustic requests by candlelight", topic: "Music", viewers: 403, theme: "from-[#3b3321] via-[#806842] to-[#d69b5d]", lifetimeGems: 10300 },
-  { id: "theo", name: "Theo Afterhours", avatar: "TA", title: "What are you making tonight?", topic: "Just Chatting", viewers: 97, theme: "from-[#283846] via-[#4a6872] to-[#9eafb0]", lifetimeGems: 320 }
+  { id: "aster", name: "Aster Vale", avatar: "AV", title: "A gentle reading for the week ahead", topic: "Tarot & Spirituality", viewers: 742, theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]", image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg" },
+  { id: "fern", name: "Fern Hollow", avatar: "FH", title: "Repotting my moon garden", topic: "Plants & Gardening", viewers: 186, theme: "from-[#163b32] via-[#416b50] to-[#a0a85b]" },
+  { id: "nia", name: "Nia Reads", avatar: "NR", title: "Quiet chapters & rainy-day tea", topic: "Books", viewers: 319, theme: "from-[#4a2534] via-[#874957] to-[#d29b74]" },
+  { id: "miso", name: "Miso & Jun", avatar: "MJ", title: "The kittens discovered the stream", topic: "Pets", viewers: 1204, theme: "from-[#593d2c] via-[#b27a47] to-[#e4c38d]" },
+  { id: "pixel", name: "PixelWitch", avatar: "PW", title: "Cozy quest, no spoilers", topic: "Gaming", viewers: 528, theme: "from-[#222d59] via-[#6153a0] to-[#c56d9b]" },
+  { id: "sol", name: "Sol Strings", avatar: "SS", title: "Acoustic requests by candlelight", topic: "Music", viewers: 403, theme: "from-[#3b3321] via-[#806842] to-[#d69b5d]" },
+  { id: "theo", name: "Theo Afterhours", avatar: "TA", title: "What are you making tonight?", topic: "Just Chatting", viewers: 97, theme: "from-[#283846] via-[#4a6872] to-[#9eafb0]" }
 ];
 
 const gifts = [
@@ -124,7 +123,7 @@ function formatCount(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId, displayName, avatarUrl }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null; displayName?: string; avatarUrl?: string }) {
+export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId, displayName, avatarUrl, gemBalance }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null; displayName?: string; avatarUrl?: string; gemBalance: number }) {
   const [screen, setScreen] = useState<"directory" | "setup" | "broadcast" | "viewer" | "earnings">("viewer");
   const [selectedTopic, setSelectedTopic] = useState<LiveTopic | "All">("All");
   const [selectedBroadcaster, setSelectedBroadcaster] = useState<Broadcaster>(initialBroadcasters[0]);
@@ -136,7 +135,8 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [liveStartedAt, setLiveStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isBroadcastPaused, setIsBroadcastPaused] = useState(false);
-  const [viewerGems, setViewerGems] = useState(850);
+  const viewerGems = gemBalance;
+  const [lifetimeGemsReceived, setLifetimeGemsReceived] = useState(0);
   const [giftsReceived, setGiftsReceived] = useState(0);
   const [hasCreatorAccess, setHasCreatorAccess] = useState(false);
   const [viewerCount, setViewerCount] = useState(742);
@@ -187,7 +187,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const currentRank = [...ranks].reverse().find((rank) => rank.gems <= selectedBroadcaster.lifetimeGems) ?? ranks[0];
+  const currentRank = [...ranks].reverse().find((rank) => rank.gems <= lifetimeGemsReceived) ?? ranks[0];
   const readerProfile = isAuthorizedReader;
   const tarotAllowed = readerProfile && screen === "broadcast";
   const isLiveNow = Boolean(myBroadcaster && liveStartedAt);
@@ -204,8 +204,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     topic: (topics.some((item) => item.name === remote.topic) ? remote.topic : "Just Chatting") as LiveTopic,
     viewers: 1,
     theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]",
-    image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg",
-    lifetimeGems: 0
+    image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg"
   });
 
   // One card per broadcaster (newest session), excluding the viewer's own broadcast
@@ -227,6 +226,15 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     : undefined;
   // Follows live at users/{followerUid}/following/{broadcasterUid}; only real signed-in members can follow
   const followTargetUid = activeSession?.ownerUid ?? null;
+  // Rank source: server-written lifetime total for the broadcaster being shown
+  const rankOwnerUid = screen === "broadcast" ? currentUserId : activeSession?.ownerUid ?? null;
+  useEffect(() => {
+    setLifetimeGemsReceived(0);
+    if (!rankOwnerUid) return;
+    return onSnapshot(doc(db, "broadcasterStats", rankOwnerUid), (snap) => {
+      setLifetimeGemsReceived(Number(snap.data()?.lifetimeGemsReceived) || 0);
+    }, () => setLifetimeGemsReceived(0));
+  }, [rankOwnerUid]);
   useEffect(() => {
     if (!currentUserId || !followTargetUid || followTargetUid === currentUserId) return;
     return onSnapshot(
@@ -398,8 +406,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       topic: broadcastTopic,
       viewers: 1,
       theme: readerProfile ? "from-[#37234f] via-[#68476a] to-[#bd7d69]" : "from-[#283846] via-[#4a6872] to-[#9eafb0]",
-      image: readerProfile ? "/src/assets/images/mystical_tarot_reader_1790704974614.jpg" : undefined,
-      lifetimeGems: readerProfile ? 26800 : 320
+      image: readerProfile ? "/src/assets/images/mystical_tarot_reader_1790704974614.jpg" : undefined
     };
     setMyBroadcaster(newBroadcaster);
     setSelectedBroadcaster(newBroadcaster);
@@ -424,13 +431,33 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     setNotice("Your broadcast has ended.");
   };
 
-  const sendGift = (gift: typeof gifts[number]) => {
+  const sendGift = async (gift: typeof gifts[number]) => {
+    const user = auth.currentUser;
+    if (!user || user.isAnonymous) {
+      setNotice("Sign in to send gifts.");
+      return;
+    }
+    if (screen !== "viewer" || !activeSession) {
+      setNotice("Gifts can only be sent to a live broadcaster.");
+      return;
+    }
     if (viewerGems < gift.gems) {
       setNotice("Not enough Gems for this gift.");
       return;
     }
-    if (!publishLiveEvent("gift", `sent a ${gift.name} ${gift.emoji} — ${gift.gems} Gems`, gift.gems)) return;
-    setViewerGems((balance) => balance - gift.gems);
+    try {
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/spend-gems", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ context: "live", giftId: gift.name.toLowerCase(), recipientId: activeSession.ownerUid, sessionId: activeSession.sessionId })
+      });
+      if (!response.ok) throw new Error("Gift was not confirmed");
+    } catch {
+      setNotice("Gift could not be sent. No Gems were spent.");
+      return;
+    }
+    publishLiveEvent("gift", `sent a ${gift.name} ${gift.emoji} — ${gift.gems} Gems`, gift.gems);
     setIsGiftSheetOpen(false);
     setNotice(`${gift.name} sent to ${selectedBroadcaster.name}`);
   };
