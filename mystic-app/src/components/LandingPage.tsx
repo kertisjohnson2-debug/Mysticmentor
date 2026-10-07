@@ -115,13 +115,20 @@ export default function LandingPage() {
         {/* 1-3. Hero artwork, tagline, CTA */}
         <section className="px-4 pt-6 sm:pt-10 pb-10 flex flex-col items-center text-center">
           <h1 className="sr-only">Mysticmentor — {TAGLINE}</h1>
-          <img
-            src={heroArtwork}
-            alt={`Mysticmentor. ${TAGLINE}`}
-            className="w-full max-w-[560px] md:max-w-[640px] lg:max-w-[600px] rounded-3xl border border-mystic-gold/40 shadow-[0_0_80px_rgba(124,58,237,0.45)]"
-            loading="eager"
-            fetchPriority="high"
-          />
+          <div className="relative w-full max-w-[560px] md:max-w-[640px] lg:max-w-[600px]">
+            <img
+              src={heroArtwork}
+              alt={`Mysticmentor. ${TAGLINE}`}
+              className="w-full rounded-3xl border border-mystic-gold/40 shadow-[0_0_80px_rgba(124,58,237,0.45)]"
+              loading="eager"
+              fetchPriority="high"
+            />
+            <a
+              href={ONBOARDING_ROUTE}
+              aria-label="Enter Mysticmentor"
+              className="absolute left-1/2 top-[86.5%] h-[7.25%] w-[50%] -translate-x-1/2 -translate-y-1/2 z-10 touch-manipulation"
+            />
+          </div>
           <div className="mt-8 space-y-4 max-w-xl">
             <EnterButton id="landing-enter-hero" />
           </div>
