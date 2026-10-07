@@ -126,7 +126,7 @@ export default function LandingPage() {
             <a
               href={ONBOARDING_ROUTE}
               aria-label="Enter Mysticmentor"
-              className="absolute left-1/2 top-[86.5%] h-[7.25%] w-[50%] -translate-x-1/2 -translate-y-1/2 z-10 touch-manipulation"
+              className="absolute left-[22.75%] top-[78.75%] h-[5.9%] w-[53.75%] z-10 touch-manipulation"
             />
           </div>
           <div className="mt-8 space-y-4 max-w-xl">
