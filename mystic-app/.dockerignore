@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.env*
+test-*.ts
+reference
+*.log
+IMG_2222.jpeg
+IMG_2240.png
