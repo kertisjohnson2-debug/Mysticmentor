@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Dispatch, FormEvent, SetStateAction } from "react";
+import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
 import {
   Activity,
   Anchor,
@@ -147,6 +147,7 @@ type Props = {
   setChatInput: Dispatch<SetStateAction<string>>;
   onSendChat: (event: FormEvent<HTMLFormElement>) => void;
   onShare: () => void;
+  notificationBell?: ReactNode;
   notice: string;
   viewerGems: number;
   onSendGift: (gift: LiveGift) => void;
@@ -209,7 +210,7 @@ export default function ImmersiveLiveRoom({
   setChatInput,
   onSendChat,
   onShare,
-  notice,
+  notificationBell,  notice,
   viewerGems,
   onSendGift,
   onSendCashTip,
@@ -363,6 +364,7 @@ export default function ImmersiveLiveRoom({
       </section>}
 
       <aside aria-label={isBroadcaster ? "Broadcast controls" : "Live reactions and gifts"} className={`absolute ${isBroadcaster ? "right-2 gap-1.5" : "right-2 gap-2"} bottom-[calc(6.25rem+env(safe-area-inset-bottom))] z-20 flex flex-col items-center md:bottom-auto md:right-5 md:top-[43%] md:-translate-y-1/2 ${isBroadcaster ? "md:gap-2" : "md:gap-3"}`}>
+        {notificationBell}
         <button onClick={onHeart} aria-label="Send a heart reaction" title="Send a heart" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-rose-200 shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Heart className="h-5 w-5 fill-current" /></button>
         {!isBroadcaster && <>
           <button onClick={() => setIsGiftSheetOpen(true)} aria-label="Send Gems or a gift" title="Gems & Gifts" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Gem className="h-5 w-5" /><span className="text-[8px] font-semibold">Gifts</span></button>

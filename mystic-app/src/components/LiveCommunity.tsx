@@ -27,6 +27,7 @@ import { requestNotification } from "../lib/notifications";
 import { eventsRef, useLiveBroadcast, useLiveViewer, type LiveSessionMeta } from "../lib/liveVideo";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import ImmersiveLiveRoom, { type LiveReadingCard, type LiveSpread } from "./ImmersiveLiveRoom";
+import NotificationBell from "./NotificationBell";
 
 type LiveTopic =
   | "Tarot & Spirituality"
@@ -625,6 +626,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         chatInput={chatInput}
         setChatInput={setChatInput}
         onSendChat={sendChat}
+        notificationBell={currentUserId ? <NotificationBell recipientUid={currentUserId} /> : undefined}
         onShare={async () => {
           if (typeof navigator.share === "function") {
             try {
