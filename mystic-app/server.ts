@@ -378,6 +378,11 @@ async function startServer() {
 
   // --- API: PROCESS SIMULATED CASH TIP (Direct Transfer Check) ---
   app.post("/api/process-sandbox-tip", async (req, res) => {
+    // Development simulator only: never available in production or on public hosts
+    if (!isSimulationAllowed(req.hostname)) {
+      return res.status(403).json({ error: "Tip simulation is disabled in this environment." });
+    }
+
     const { userId, recipientId, amount } = req.body;
 
     if (!userId || !recipientId || !amount) {
