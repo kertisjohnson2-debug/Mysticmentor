@@ -192,9 +192,14 @@ export default function App() {
   const [staffList, setStaffList] = useState<any[]>([]);
   const [tarotReaderEmailInput, setTarotReaderEmailInput] = useState("");
   const [tarotReaderList, setTarotReaderList] = useState<any[]>([]);
-  // Admins/owners get Tarot automatically; other users need the admin-granted tarotReader flag
+  // UI gate only (Firestore rules enforce hasTarotPermission). Derived from the user's Firestore document, not the
+  // admin-portal session flag. tarotReader keeps the verified-email requirement because the rules require it too.
   const hasTarotReaderPermission = Boolean(
-    currentUser?.emailVerified && (isAdminAuthenticated || dbUserDoc?.tarotReader === true)
+    currentUser && !currentUser.isAnonymous && (
+      dbUserDoc?.role === "admin" ||
+      (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified) ||
+      (currentUser.emailVerified && dbUserDoc?.tarotReader === true)
+    )
   );
   const [financialStats, setFinancialStats] = useState<any>({
     totalGrossVolume: 0,
@@ -449,7 +454,7 @@ export default function App() {
         setDbUserDoc(data);
         
         // Auto-elevate admin state for current session if role matches or email matches AND email is verified
-        if ((data.role === "admin" || currentUser.email === "kertisjohnson7@gmail.com") && currentUser.emailVerified) {
+        if (data.role === "admin" || (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified)) {
           setIsAdminAuthenticated(true);
         } else {
           setIsAdminAuthenticated(false);
@@ -2443,6 +2448,7 @@ export default function App() {
               onExit={() => setActiveTab("home")}
               isAuthorizedReader={hasTarotReaderPermission}
               currentUserId={currentUser?.uid ?? null}
+              avatarUrl={currentUser ? dbUserDoc?.avatarUrl || currentUser.photoURL || undefined : undefined}
               displayName={currentUser ? dbUserDoc?.displayName || currentUser.displayName || currentUser.email?.split("@")[0] || undefined : undefined}
             />
           )}

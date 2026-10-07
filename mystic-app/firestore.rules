@@ -18,8 +18,8 @@ service cloud.firestore {
 
     // Secure server-enforced bootstrapped administrator authorization logic
     function isAdmin() {
-      return isSignedIn() && request.auth.token.email_verified == true && (
-        request.auth.token.email == "kertisjohnson7@gmail.com" ||
+      return isSignedIn() && (
+        (request.auth.token.email_verified == true && request.auth.token.email == "kertisjohnson7@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
       );
     }
@@ -113,6 +113,17 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isOwner(userId);
     }
 
+    // Follows: a signed-in (non-anonymous) member manages only their own records, keyed by the followed user's UID
+    match /users/{userId}/following/{targetId} {
+      allow read, delete: if isSignedIn() && isOwner(userId) && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow create: if isSignedIn() && isOwner(userId) && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && isValidId(targetId) && targetId != userId
+        && request.resource.data.keys().hasOnly(['broadcasterUid', 'followedAt'])
+        && request.resource.data.broadcasterUid == targetId
+        && request.resource.data.followedAt is number;
+      allow update: if false;
+    }
+
     // 3. Isolated virtual ledger records (Immutable transactions)
     match /users/{userId}/transactions/{transactionId} {
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
@@ -150,6 +161,7 @@ service cloud.firestore {
       function isValidLiveSessionMeta(data) {
         return (!('name' in data) || (data.name is string && data.name.size() <= 80)) &&
           (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 8)) &&
+          (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 40000)) &&
           (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
           (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
           (!('hashtags' in data) || (data.hashtags is string && data.hashtags.size() <= 300)) &&
@@ -167,7 +179,7 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.auth.token.firebase.sign_in_provider != 'anonymous' &&
         isValidId(sessionId) &&
-        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'avatarUrl', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
         request.resource.data.keys().hasAll(['ownerUid', 'sessionId', 'status', 'startedAt']) &&
         isValidLiveSessionMeta(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
@@ -175,8 +187,8 @@ service cloud.firestore {
         request.resource.data.status == 'live' &&
         request.resource.data.startedAt is number;
       allow update: if isSessionOwner() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
-        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt', 'name', 'avatar', 'avatarUrl', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
+        request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'status', 'startedAt', 'name', 'avatar', 'avatarUrl', 'title', 'description', 'hashtags', 'topic', 'updatedAt']) &&
         isValidLiveSessionMeta(request.resource.data) &&
         request.resource.data.ownerUid == request.auth.uid &&
         request.resource.data.sessionId == sessionId &&
