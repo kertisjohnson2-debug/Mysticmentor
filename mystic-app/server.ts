@@ -12,7 +12,7 @@ import fs from "fs/promises";
 import admin from "firebase-admin";
 import { getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import crypto from "crypto";
 
@@ -115,6 +115,162 @@ async function startServer() {
 
   // --- PARSE JSON FOR STANDARD API ENDPOINTS ---
   app.use(express.json());
+
+  // --- API: NOTIFICATIONS (server-only writers; clients can never write notification docs) ---
+  const NOTIFICATION_AVATAR_MAX = 40000;
+  const LIVE_NOTIFY_MAX_AGE_MS = 2 * 60 * 1000;
+  const NOTIFY_RATE_WINDOW_MS = 60 * 1000;
+  const NOTIFY_RATE_MAX = 30;
+  const notifyRateHits = new Map<string, number[]>();
+
+  const isRateLimited = (uid: string) => {
+    const now = Date.now();
+    const hits = (notifyRateHits.get(uid) ?? []).filter((time) => now - time < NOTIFY_RATE_WINDOW_MS);
+    hits.push(now);
+    notifyRateHits.set(uid, hits);
+    return hits.length > NOTIFY_RATE_MAX;
+  };
+
+  // Returns the verified, non-anonymous caller uid or sends the error response
+  const authenticateMember = async (req: express.Request, res: express.Response): Promise<string | null> => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.length <= 7) {
+      res.status(401).json({ error: "Missing or invalid authorization header" });
+      return null;
+    }
+    try {
+      const decoded = await getAuth().verifyIdToken(authHeader.substring(7));
+      if (decoded.firebase?.sign_in_provider === "anonymous") {
+        res.status(403).json({ error: "Sign in to continue" });
+        return null;
+      }
+      if (isRateLimited(decoded.uid)) {
+        res.status(429).json({ error: "Too many requests" });
+        return null;
+      }
+      return decoded.uid;
+    } catch {
+      res.status(401).json({ error: "Invalid ID token" });
+      return null;
+    }
+  };
+
+  const safeAvatar = (value: unknown) => (typeof value === "string" && value.length <= NOTIFICATION_AVATAR_MAX ? value : "");
+
+  // Creates the doc only if absent; the deterministic id makes repeated requests no-ops
+  const createNotificationOnce = async (recipientUid: string, notificationId: string, data: Record<string, unknown>) => {
+    try {
+      await db.collection("users").doc(recipientUid).collection("notifications").doc(notificationId).create(data);
+      return true;
+    } catch (error: any) {
+      if (error?.code === 6 || error?.code === "already-exists") return false;
+      throw error;
+    }
+  };
+
+  app.post("/api/notify-follow", async (req, res) => {
+    const followerUid = await authenticateMember(req, res);
+    if (!followerUid) return;
+
+    const broadcasterUid = req.body?.broadcasterUid;
+    if (typeof broadcasterUid !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(broadcasterUid)) {
+      return res.status(400).json({ error: "Invalid broadcasterUid" });
+    }
+    if (broadcasterUid === followerUid) {
+      return res.status(400).json({ error: "You cannot notify yourself" });
+    }
+
+    try {
+      const followSnap = await db.collection("users").doc(followerUid).collection("following").doc(broadcasterUid).get();
+      if (!followSnap.exists || followSnap.data()?.broadcasterUid !== broadcasterUid) {
+        return res.status(404).json({ error: "Follow not found" });
+      }
+      const recipientSnap = await db.collection("users").doc(broadcasterUid).get();
+      if (!recipientSnap.exists) {
+        return res.status(404).json({ error: "Recipient not found" });
+      }
+
+      const followerSnap = await db.collection("users").doc(followerUid).get();
+      const followerData = followerSnap.data() ?? {};
+      const actorDisplayName = String(followerData.displayName || "A member").slice(0, 100);
+      const dedupeKey = `follow:${followerUid}:${broadcasterUid}`;
+
+      const created = await createNotificationOnce(broadcasterUid, dedupeKey, {
+        type: "follow",
+        message: `${actorDisplayName} followed you.`,
+        actorUid: followerUid,
+        actorDisplayName,
+        actorAvatarUrl: safeAvatar(followerData.avatarUrl),
+        recipientUid: broadcasterUid,
+        broadcasterUid: null,
+        sessionId: null,
+        createdAt: FieldValue.serverTimestamp(),
+        readAt: null,
+        dedupeKey
+      });
+      return res.json({ created });
+    } catch (error) {
+      console.error("[Notifications] Follow notification failed:", error);
+      return res.status(500).json({ error: "Could not create notification" });
+    }
+  });
+
+  app.post("/api/notify-live", async (req, res) => {
+    const broadcasterUid = await authenticateMember(req, res);
+    if (!broadcasterUid) return;
+
+    const sessionId = req.body?.sessionId;
+    if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) {
+      return res.status(400).json({ error: "Invalid sessionId" });
+    }
+
+    try {
+      const sessionSnap = await db.collection("liveSessions").doc(sessionId).get();
+      const session = sessionSnap.data();
+      if (!session || session.ownerUid !== broadcasterUid) {
+        return res.status(403).json({ error: "You do not own this live session" });
+      }
+      if (session.status !== "live" || typeof session.startedAt !== "number" || Date.now() - session.startedAt > LIVE_NOTIFY_MAX_AGE_MS) {
+        return res.status(409).json({ error: "Live session is not currently starting" });
+      }
+
+      const broadcasterSnap = await db.collection("users").doc(broadcasterUid).get();
+      const broadcasterData = broadcasterSnap.data() ?? {};
+      const actorDisplayName = String(broadcasterData.displayName || session.name || "A broadcaster").slice(0, 100);
+      const actorAvatarUrl = safeAvatar(session.avatarUrl);
+
+      const followers = await db.collectionGroup("following").where("broadcasterUid", "==", broadcasterUid).get();
+      const followerUids = followers.docs
+        .filter((item) => item.ref.parent.parent?.parent.id === "users")
+        .map((item) => item.ref.parent.parent!.id)
+        .filter((uid) => uid !== broadcasterUid);
+
+      let created = 0;
+      for (let index = 0; index < followerUids.length; index += 25) {
+        const results = await Promise.all(followerUids.slice(index, index + 25).map((followerUid) => {
+          const dedupeKey = `live:${sessionId}:${followerUid}`;
+          return createNotificationOnce(followerUid, dedupeKey, {
+            type: "live",
+            message: `${actorDisplayName} is live now.`,
+            actorUid: broadcasterUid,
+            actorDisplayName,
+            actorAvatarUrl,
+            recipientUid: followerUid,
+            broadcasterUid,
+            sessionId,
+            createdAt: FieldValue.serverTimestamp(),
+            readAt: null,
+            dedupeKey
+          });
+        }));
+        created += results.filter(Boolean).length;
+      }
+      return res.json({ created, followers: followerUids.length });
+    } catch (error) {
+      console.error("[Notifications] Live notification failed:", error);
+      return res.status(500).json({ error: "Could not create notifications" });
+    }
+  });
 
   // --- API: DAILY HOROSCOPE (proxy + cache; upstream has no CORS) ---
   const HOROSCOPE_SIGNS = ["aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"];

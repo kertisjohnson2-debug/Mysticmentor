@@ -13,6 +13,7 @@ import {
   type Unsubscribe
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { requestNotification } from "./notifications";
 
 /*
  * Live video: device-to-device WebRTC. Firestore carries signaling only (never media).
@@ -160,6 +161,7 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
       try {
         await setDoc(sessionRef(sessionId), { ownerUid: broadcasterUid, sessionId, status: "live", startedAt: Date.now(), updatedAt: Date.now(), ...metaRef.current });
         if (cancelled) return;
+        requestNotification("/api/notify-live", { sessionId });
         sessionIdRef.current = sessionId;
         setPublishedSessionId(sessionId);
         heartbeat = window.setInterval(() => {

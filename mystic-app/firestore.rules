@@ -124,6 +124,16 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // Notifications: created only by trusted server code (Admin SDK bypasses rules). Owners may read them and set readAt once.
+    match /users/{userId}/notifications/{notificationId} {
+      allow read: if isSignedIn() && isOwner(userId) && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow update: if isSignedIn() && isOwner(userId) && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && resource.data.get('readAt', null) == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])
+        && request.resource.data.readAt == request.time;
+      allow create, delete: if false;
+    }
+
     // 3. Isolated virtual ledger records (Immutable transactions)
     match /users/{userId}/transactions/{transactionId} {
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin());

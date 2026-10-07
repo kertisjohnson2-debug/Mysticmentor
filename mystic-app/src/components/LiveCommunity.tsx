@@ -23,6 +23,7 @@ import {
   X
 } from "lucide-react";
 import { createLiveAvatarThumbnail } from "../lib/avatarImage";
+import { requestNotification } from "../lib/notifications";
 import { eventsRef, useLiveBroadcast, useLiveViewer, type LiveSessionMeta } from "../lib/liveVideo";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import ImmersiveLiveRoom, { type LiveReadingCard, type LiveSpread } from "./ImmersiveLiveRoom";
@@ -241,7 +242,10 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     const followRef = doc(db, "users", currentUserId, "following", followTargetUid);
     try {
       if (isFollowing) await deleteDoc(followRef);
-      else await setDoc(followRef, { broadcasterUid: followTargetUid, followedAt: Date.now() });
+      else {
+        await setDoc(followRef, { broadcasterUid: followTargetUid, followedAt: Date.now() });
+        requestNotification("/api/notify-follow", { broadcasterUid: followTargetUid });
+      }
     } catch (error) {
       console.error("Could not update follow:", error);
       setNotice("Could not update follow. Please try again.");
