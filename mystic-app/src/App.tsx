@@ -240,6 +240,9 @@ export default function App() {
       }));
   }, [financialRecords]);
   const maxMonthlyGross = Math.max(1, ...monthlyGrossHistory.map((m) => m.total));
+  const gemsCredited = financialRecords
+    .filter((r) => r.type === "gem_purchase")
+    .reduce((sum, r) => sum + (Number(r.gemsAmount) || 0), 0);
   const todayGross = useMemo(() => {
     const today = new Date().toDateString();
     return financialRecords
@@ -3364,11 +3367,11 @@ export default function App() {
                     </div>
                     <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
                       <span className="text-[8px] text-slate-400 uppercase block mb-1">Archived Inquiries</span>
-                      <span className="text-sm font-bold text-teal-400 tabular-nums">188</span>
+                      <span className="text-sm font-bold text-teal-400 tabular-nums">0</span>
                     </div>
                     <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
                       <span className="text-[8px] text-slate-400 uppercase block mb-1">Gems Credited</span>
-                      <span className="text-sm font-bold text-mystic-gold tabular-nums">480g</span>
+                      <span className="text-sm font-bold text-mystic-gold tabular-nums">{gemsCredited}g</span>
                     </div>
                   </div>
 
@@ -3404,24 +3407,8 @@ export default function App() {
                       Active Telepathy waiting Queue
                     </span>
 
-                    <div className="space-y-1.5">
-                      {[
-                        { name: "Evelyn Vance", status: "Drawing Tarot", topic: "Career Alignment" },
-                        { name: "Dr. Marcus Chen", status: "Calculating Life Path", topic: "Pythagorean Vibrations" },
-                        { name: "Vesta Priestess", status: "Awaiting Live Portal", topic: "Sacred Love Cord" }
-                      ].map((client, idx) => (
-                        <div
-                          key={idx}
-                          className="p-2.5 rounded-lg bg-black/60 border border-[#2c1654]/30 flex justify-between items-center text-[11px]"
-                        >
-                          <div>
-                            <span className="font-semibold text-white">{client.name}</span>
-                            <span aria-hidden="true" className="mx-1.5 text-slate-600">·</span>
-                            <span className="text-slate-400">{client.topic}</span>
-                          </div>
-                          <span className="text-[9px] text-teal-400 italic font-medium">{client.status}</span>
-                        </div>
-                      ))}
+                    <div className="py-6 text-center text-[11px] text-slate-500 border border-dashed border-[#2c1654]/40 rounded-lg italic">
+                      No clients waiting — no records yet.
                     </div>
                   </div>
                 </div>
