@@ -88,10 +88,10 @@ import LiveCommunity from "./components/LiveCommunity";
 import MyProfile from "./components/MyProfile";
 import type { UserIdentity } from "./types/userProfile";
 
-// Path mappings to high-fidelity generated images
-const COSMIC_BACKDROP = "/src/assets/images/cosmic_tarot_backdrop_1790704955137.jpg";
-const CARD_BACK_IMG = "/src/assets/images/mystical_card_back_1790704964638.jpg";
-const TAROT_READER_IMG = "/src/assets/images/mystical_tarot_reader_1790704974614.jpg";
+// Bundled image assets (hashed URLs in production builds)
+import COSMIC_BACKDROP from "./assets/images/cosmic_tarot_backdrop_1790704955137.jpg";
+import CARD_BACK_IMG from "./assets/images/mystical_card_back_1790704964638.jpg";
+import TAROT_READER_IMG from "./assets/images/mystical_tarot_reader_1790704974614.jpg";
 
 async function ensureServerProfile(user: { getIdToken: () => Promise<string> }, displayName?: string | null): Promise<any | null> {
   const token = await user.getIdToken();
@@ -1468,6 +1468,17 @@ export default function App() {
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
       <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
         
+        {/* Phone-only scenery inside the app column, beneath all content */}
+        {activeTab !== "live" && (
+          <div aria-hidden="true" className="md:hidden absolute inset-0 -z-10 pointer-events-none overflow-hidden">
+            <div
+              className="absolute inset-0 bg-cover bg-[62%_50%] opacity-45"
+              style={{ backgroundImage: `url(${COSMIC_BACKDROP})` }}
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#070412]/60 via-[#070412]/25 to-[#070412]/75" />
+          </div>
+        )}
+
         {/* Continuous Floating & Pulsing Cosmic Orbs at varied sizes and depths */}
         {activeTab !== "live" && <>
           <div className="absolute top-12 left-10 w-24 h-24 cosmic-glowing-orb-gold animate-float-orb-gold pointer-events-none" />
