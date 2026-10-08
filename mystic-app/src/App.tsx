@@ -1443,10 +1443,27 @@ export default function App() {
 
   return (
     <>
-    <div className="h-[100dvh] overflow-hidden bg-[#070412] text-slate-100 flex flex-col items-center">
-      
+    <div className="h-[100dvh] overflow-hidden bg-[#070412] text-slate-100 flex flex-col items-center relative">
+      {/* Wide-screen sanctuary scenery (hidden on phones) */}
+      <div aria-hidden="true" className="hidden md:block absolute inset-0 pointer-events-none overflow-hidden">
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-60"
+          style={{ backgroundImage: `url(${COSMIC_BACKDROP})` }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#070412]/70 via-transparent to-[#070412]/70" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#070412]/40 via-transparent to-[#070412]/70" />
+        <div
+          className="hidden lg:block absolute top-1/2 left-[4%] xl:left-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 -rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
+        />
+        <div
+          className="hidden lg:block absolute top-1/2 right-[4%] xl:right-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
+        />
+      </div>
+
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
-      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
+      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
         
         {/* Continuous Floating & Pulsing Cosmic Orbs at varied sizes and depths */}
         {activeTab !== "live" && <>
