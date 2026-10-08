@@ -86,6 +86,7 @@ import {
 import CelestialOnboarding from "./components/CelestialOnboarding";
 import LiveCommunity from "./components/LiveCommunity";
 import MyProfile from "./components/MyProfile";
+import TarotCardArt from "./components/TarotCardArt";
 import type { UserIdentity } from "./types/userProfile";
 
 // Bundled image assets (hashed URLs in production builds)
@@ -1697,17 +1698,15 @@ export default function App() {
                             dailyCardReversed ? "rotate-180" : ""
                           }`}
                         >
+                          <TarotCardArt id={dailyCard.id} className="absolute inset-0 w-full h-full rounded-xl pointer-events-none" />
                           {/* Delicate celestial gold frame */}
                           <div className="absolute inset-1.5 border border-mystic-gold/20 rounded-lg pointer-events-none" />
                           
-                          <span className="text-[10px] font-mono tracking-widest text-mystic-gold/80 block mt-1">
+                          <span className="text-[10px] font-mono tracking-widest text-mystic-gold/80 block mt-1 z-10 drop-shadow">
                             ARCANA {dailyCard.number}
                           </span>
 
-                          <div className="my-auto flex flex-col items-center z-10">
-                            <div className="w-14 h-14 rounded-full bg-mystic-gold/10 border border-mystic-gold/30 flex items-center justify-center text-mystic-gold mb-2 shadow-inner">
-                              {getLucideIcon(dailyCard.iconName, "w-8 h-8")}
-                            </div>
+                          <div className="mt-auto flex flex-col items-center z-10">
                             <h3 className="font-display text-sm font-semibold text-white tracking-wide">
                               {dailyCard.name}
                             </h3>
@@ -1994,17 +1993,15 @@ export default function App() {
                                   item.isReversed ? "rotate-180" : ""
                                 }`}
                               >
+                                <TarotCardArt id={item.card.id} className="absolute inset-0 w-full h-full rounded-lg pointer-events-none" />
                                 {/* Subtle gold accent */}
                                 <div className="absolute inset-1 border border-mystic-gold/10 rounded-md pointer-events-none" />
 
-                                <span className="text-[8px] font-mono text-mystic-gold/80 block uppercase tracking-tight">
+                                <span className="text-[8px] font-mono text-mystic-gold/80 block uppercase tracking-tight z-10 drop-shadow">
                                   Arcana {item.card.number}
                                 </span>
 
-                                <div className="my-auto flex flex-col items-center">
-                                  <div className="w-8 h-8 rounded-full bg-mystic-gold/10 border border-mystic-gold/20 flex items-center justify-center text-mystic-gold mb-1">
-                                    {getLucideIcon(item.card.iconName, "w-4 h-4")}
-                                  </div>
+                                <div className="mt-auto flex flex-col items-center z-10">
                                   <h4 className="font-display text-[9px] font-bold text-white tracking-tight leading-tight line-clamp-1">
                                     {item.card.name}
                                   </h4>
