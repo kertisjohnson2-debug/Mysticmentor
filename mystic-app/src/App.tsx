@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   auth, 
   db, 
@@ -219,6 +219,33 @@ export default function App() {
     purchaseCount: 0
   });
   const [financialRecords, setFinancialRecords] = useState<any[]>([]);
+
+  const monthlyGrossHistory = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const r of financialRecords) {
+      if (r.type !== "gem_purchase" && r.type !== "tip") continue;
+      const amount = Number(r.amount);
+      const date = r.createdAt ? new Date(r.createdAt) : null;
+      if (!date || isNaN(date.getTime()) || !Number.isFinite(amount)) continue;
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      totals.set(key, (totals.get(key) ?? 0) + amount);
+    }
+    return Array.from(totals.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([key, total]) => ({
+        key,
+        total,
+        label: new Date(`${key}-01T00:00:00`).toLocaleString(undefined, { month: "short" })
+      }));
+  }, [financialRecords]);
+  const maxMonthlyGross = Math.max(1, ...monthlyGrossHistory.map((m) => m.total));
+  const todayGross = useMemo(() => {
+    const today = new Date().toDateString();
+    return financialRecords
+      .filter((r) => (r.type === "gem_purchase" || r.type === "tip") && r.createdAt && new Date(r.createdAt).toDateString() === today)
+      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+  }, [financialRecords]);
 
   // --- TAROT SPREAD STATE ---
   const [tarotTopic, setTarotTopic] = useState("General Guidance");
@@ -3316,7 +3343,7 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-2 font-mono">
                     <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
                       <span className="text-[8px] text-slate-400 uppercase block mb-1">Today's Gross</span>
-                      <span className="text-sm font-bold text-white tabular-nums">$242.50</span>
+                      <span className="text-sm font-bold text-white tabular-nums">${todayGross.toFixed(2)}</span>
                     </div>
                     <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
                       <span className="text-[8px] text-slate-400 uppercase block mb-1">Archived Inquiries</span>
@@ -3331,26 +3358,27 @@ export default function App() {
                   {/* Monthly Compounding revenue graph */}
                   <div className="p-4 rounded-xl bg-black/40 border border-[#2c1654]/40 space-y-2 text-left">
                     <span className="text-[9px] font-mono text-slate-400 uppercase block font-bold">
-                      Compounding Revenue History (Simulated Monthly Stats)
+                      Revenue History (Gross Volume by Month, Recent Ledger Records)
                     </span>
-                    
-                    <div className="h-24 flex items-end justify-between px-3 bg-black/40 rounded border border-[#2c1654]/40 pt-4">
-                      {[
-                        { month: "Jun", val: 40, amt: "$1.2k" },
-                        { month: "Jul", val: 55, amt: "$1.8k" },
-                        { month: "Aug", val: 75, amt: "$2.4k" },
-                        { month: "Sep", val: 95, amt: "$3.1k" }
-                      ].map((m, idx) => (
-                        <div key={idx} className="flex flex-col items-center flex-1 space-y-1">
-                          <span className="text-[7px] text-teal-300 font-mono">{m.amt}</span>
-                          <div
-                            className="w-8 bg-gradient-to-t from-[#2c1654] to-mystic-gold rounded-t transition-all duration-1000"
-                            style={{ height: `${m.val}px` }}
-                          />
-                          <span className="text-[8px] text-slate-500 uppercase">{m.month}</span>
-                        </div>
-                      ))}
-                    </div>
+
+                    {monthlyGrossHistory.length === 0 ? (
+                      <div className="h-24 flex items-center justify-center text-center text-[10px] text-slate-500 italic bg-black/40 rounded border border-dashed border-[#2c1654]/40 px-3">
+                        No revenue history yet. Monthly totals will appear once payments are recorded.
+                      </div>
+                    ) : (
+                      <div className="h-24 flex items-end justify-between px-3 bg-black/40 rounded border border-[#2c1654]/40 pt-4">
+                        {monthlyGrossHistory.map((m) => (
+                          <div key={m.key} className="flex flex-col items-center flex-1 space-y-1">
+                            <span className="text-[7px] text-teal-300 font-mono">${m.total.toFixed(2)}</span>
+                            <div
+                              className="w-8 bg-gradient-to-t from-[#2c1654] to-mystic-gold rounded-t transition-all duration-1000"
+                              style={{ height: `${Math.max(2, Math.round((m.total / maxMonthlyGross) * 48))}px` }}
+                            />
+                            <span className="text-[8px] text-slate-500 uppercase">{m.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Client waiting list */}
