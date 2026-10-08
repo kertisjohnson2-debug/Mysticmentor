@@ -204,6 +204,9 @@ export default function App() {
   const [staffList, setStaffList] = useState<any[]>([]);
   const [tarotReaderEmailInput, setTarotReaderEmailInput] = useState("");
   const [tarotReaderList, setTarotReaderList] = useState<any[]>([]);
+  const [memberList, setMemberList] = useState<any[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   // UI gate only (Firestore rules enforce hasTarotPermission). Derived from the user's Firestore document, not the
   // admin-portal session flag. tarotReader keeps the verified-email requirement because the rules require it too.
   const hasTarotReaderPermission = Boolean(
@@ -485,7 +488,14 @@ export default function App() {
       if (snap.exists()) {
         const data = snap.data();
         setDbUserDoc(data);
-        
+
+        // Suspended members are signed out; Firestore rules also block their profile writes and Tarot access
+        if (data.suspended === true && data.role !== "admin" && currentUser.email !== "kertisjohnson7@gmail.com") {
+          alert("Your account has been suspended. Please contact Mysticmentor support.");
+          signOut(auth);
+          return;
+        }
+
         // Auto-elevate admin state for current session if role matches or email matches AND email is verified
         if (data.role === "admin" || (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified)) {
           setIsAdminAuthenticated(true);
@@ -591,6 +601,21 @@ export default function App() {
       setTarotReaderList(snapshot.docs.map((d) => ({ uid: d.id, ...d.data() })));
     }, (error) => {
       console.error("Failed to sync Tarot Reader roster:", error);
+    });
+    return () => unsubscribe();
+  }, [isAdminAuthenticated]);
+
+  // Real-time member roster (Admin only; Firestore rules restrict listing all profiles to admins)
+  useEffect(() => {
+    if (!isAdminAuthenticated) {
+      setMemberList([]);
+      setSelectedMemberId(null);
+      return;
+    }
+    const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+      setMemberList(snapshot.docs.map((d) => ({ uid: d.id, ...d.data() })));
+    }, (error) => {
+      console.error("Failed to sync member roster:", error);
     });
     return () => unsubscribe();
   }, [isAdminAuthenticated]);
@@ -1271,6 +1296,22 @@ export default function App() {
     } catch (error) {
       console.error("Failed to update Tarot Reader permission:", error);
       alert("Permission Denied: Only authorized administrators can change Tarot Reader access.");
+    }
+  };
+
+  // Suspend or unsuspend a member (enforced by Firestore rules: only admins may write this field)
+  const handleSetSuspended = async (member: any, suspended: boolean) => {
+    if (member.role === "admin" || member.email === "kertisjohnson7@gmail.com") {
+      alert("Administrators cannot be suspended.");
+      return;
+    }
+    const label = member.displayName || member.email;
+    if (suspended && !confirm(`Suspend "${label}"? They will be signed out and blocked from account actions.`)) return;
+    try {
+      await updateDoc(doc(db, "users", member.uid), { suspended, updatedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error("Failed to update suspension:", error);
+      alert("Permission Denied: Only authorized administrators can suspend accounts.");
     }
   };
 
@@ -3989,6 +4030,102 @@ export default function App() {
                         </button>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Member Management */}
+                  <div className="p-4 rounded-xl border border-mystic-gold/30 bg-[#070412]/80 space-y-3">
+                    <span className="text-[10px] font-mono tracking-widest text-mystic-gold font-bold uppercase block">
+                      Member Management ({memberList.length})
+                    </span>
+                    <input
+                      type="search"
+                      value={memberSearch}
+                      onChange={(e) => setMemberSearch(e.target.value)}
+                      placeholder="Search by name or email"
+                      className="w-full bg-[#0b081c] border border-[#2c1654] rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-mystic-gold"
+                    />
+                    {(() => {
+                      const needle = memberSearch.trim().toLowerCase();
+                      const filtered = memberList
+                        .filter((m) => !needle || `${m.displayName || ""} ${m.email || ""}`.toLowerCase().includes(needle))
+                        .sort((a, b) => String(a.displayName || a.email || "").localeCompare(String(b.displayName || b.email || "")))
+                        .slice(0, 100);
+                      if (filtered.length === 0) {
+                        return (
+                          <div className="text-center text-[10px] text-slate-500 border border-dashed border-[#2c1654] rounded-lg py-4">
+                            No members found.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                          {filtered.map((m) => {
+                            const open = selectedMemberId === m.uid;
+                            const isAdminMember = m.role === "admin" || m.email === "kertisjohnson7@gmail.com";
+                            return (
+                              <div key={m.uid} className="rounded-lg bg-[#120a26]/60 border border-[#2c1654]/40">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedMemberId(open ? null : m.uid)}
+                                  className="w-full flex items-center gap-3 p-2 text-left cursor-pointer"
+                                >
+                                  {m.avatarUrl ? (
+                                    <img src={m.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover border border-mystic-gold/40 shrink-0" />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-[#2c1654] text-mystic-gold flex items-center justify-center text-[11px] font-bold shrink-0">
+                                      {(m.displayName || m.email || "?").charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-[11px] font-bold text-white truncate">{m.displayName || "Unnamed member"}</div>
+                                    <div className="text-[10px] font-mono text-slate-400 truncate">{m.email}</div>
+                                  </div>
+                                  {m.suspended === true && (
+                                    <span className="text-[8px] px-1.5 py-0.5 rounded bg-red-950/40 border border-red-500/30 text-red-400 font-bold uppercase">Suspended</span>
+                                  )}
+                                </button>
+                                {open && (
+                                  <div className="px-3 pb-3 pt-1 space-y-2 border-t border-[#2c1654]/40 text-[10px]">
+                                    <div className="grid grid-cols-2 gap-2 text-slate-300">
+                                      <div><span className="text-slate-500 uppercase font-mono block">Role</span>{m.role || "member"}</div>
+                                      <div><span className="text-slate-500 uppercase font-mono block">Tarot Reader</span>{m.tarotReader === true || isAdminMember ? "Yes" : "No"}</div>
+                                      <div><span className="text-slate-500 uppercase font-mono block">Gems</span>{typeof m.gemBalance === "number" ? m.gemBalance : 0}</div>
+                                      <div><span className="text-slate-500 uppercase font-mono block">Clout</span>{typeof m.cloutPoints === "number" ? m.cloutPoints : 0}</div>
+                                      <div className="col-span-2"><span className="text-slate-500 uppercase font-mono block">Joined</span>{m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "—"}</div>
+                                      <div className="col-span-2 break-all"><span className="text-slate-500 uppercase font-mono block">Member ID</span>{m.uid}</div>
+                                    </div>
+                                    {isAdminMember ? (
+                                      <p className="text-slate-500 italic">Administrator accounts cannot be suspended or have Tarot access changed here.</p>
+                                    ) : (
+                                      <div className="flex gap-2 pt-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSetTarotReader(null, { uid: m.uid, email: m.email }, m.tarotReader !== true)}
+                                          className="flex-1 py-1.5 rounded bg-mystic-gold/10 border border-mystic-gold/40 text-mystic-gold font-bold uppercase active:scale-95 transition-all cursor-pointer"
+                                        >
+                                          {m.tarotReader === true ? "Revoke Tarot" : "Grant Tarot"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSetSuspended(m, m.suspended !== true)}
+                                          className={`flex-1 py-1.5 rounded border font-bold uppercase active:scale-95 transition-all cursor-pointer ${
+                                            m.suspended === true
+                                              ? "bg-teal-950/30 border-teal-500/40 text-teal-300"
+                                              : "bg-red-950/20 border-red-500/30 text-red-400"
+                                          }`}
+                                        >
+                                          {m.suspended === true ? "Unsuspend" : "Suspend"}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                 </div>

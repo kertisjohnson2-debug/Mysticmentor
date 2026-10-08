@@ -32,7 +32,8 @@ service cloud.firestore {
       return isAdmin() || (
         isSignedIn() && request.auth.token.email_verified == true &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('tarotReader', false) == true
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('tarotReader', false) == true &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('suspended', false) == false
       );
     }
 
@@ -56,13 +57,14 @@ service cloud.firestore {
     // --- VALIDATION HELPERS ---
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
-             data.keys().hasOnly(['uid', 'email', 'displayName', 'avatarUrl', 'role', 'tarotReader', 'gemBalance', 'cloutPoints', 'lifetimeGemsReceived', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['uid', 'email', 'displayName', 'avatarUrl', 'role', 'tarotReader', 'suspended', 'gemBalance', 'cloutPoints', 'lifetimeGemsReceived', 'createdAt', 'updatedAt']) &&
              data.uid == request.auth.uid &&
              data.email is string &&
              data.get('displayName', '') is string && data.get('displayName', '').size() <= 100 &&
              data.get('avatarUrl', '') is string && data.get('avatarUrl', '').size() <= 300000 &&
              data.role in ['member', 'admin'] &&
              data.get('tarotReader', false) is bool &&
+             data.get('suspended', false) is bool &&
              data.gemBalance is int && data.gemBalance >= 0 &&
              data.cloutPoints is int && data.cloutPoints >= 0;
     }
@@ -95,6 +97,7 @@ service cloud.firestore {
         // Prevent normal users from self-assigning admin roles during creation
         request.resource.data.role == "member" || (request.resource.data.role == "admin" && request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true)
       ) && request.resource.data.get('tarotReader', false) == false
+        && request.resource.data.get('suspended', false) == false
         && request.resource.data.gemBalance == 0
         && request.resource.data.cloutPoints == 0
         && request.resource.data.get('lifetimeGemsReceived', 0) == 0;
@@ -104,7 +107,9 @@ service cloud.firestore {
         request.resource.data.cloutPoints == resource.data.cloutPoints &&
         request.resource.data.get('lifetimeGemsReceived', 0) == resource.data.get('lifetimeGemsReceived', 0) &&
         request.resource.data.role == resource.data.role &&
-        request.resource.data.get('tarotReader', false) == resource.data.get('tarotReader', false)
+        request.resource.data.get('tarotReader', false) == resource.data.get('tarotReader', false) &&
+        request.resource.data.get('suspended', false) == resource.data.get('suspended', false) &&
+        resource.data.get('suspended', false) == false
       ) || isAdmin();
       allow delete: if isAdmin();
     }
