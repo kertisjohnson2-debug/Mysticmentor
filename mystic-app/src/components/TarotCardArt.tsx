@@ -6,44 +6,50 @@ import React from "react";
  * Coordinate space is 100 x 150; the scene lives in the upper ~110 units.
  */
 
-const GOLD = "#f3c65f";
-const GOLD_LIGHT = "#ffe9a8";
-const GOLD_DARK = "#8a5a12";
+const GOLD = "#ffcf4d";
+const GOLD_LIGHT = "#fff2b8";
+const GOLD_DARK = "#9a5a0a";
 const INK = "#0b0620";
 const SILVER = "#e8e6f5";
-const SKIN = "#f1d3b3";
-const TEAL = "#2fc9b4";
+const SKIN = "#f4c9a0";
+const TEAL = "#14d4c0";
 const WOOD = "#b9873a";
-const LEAF = "#46c08a";
-const ROSE = "#d6457a";
+const LEAF = "#22b57a";
+const ROSE = "#e0307a";
 
 type P = { x?: number; y?: number; r?: number; s?: number };
 const T = ({ x = 0, y = 0, r = 0, s = 1 }: P) => `translate(${x} ${y}) rotate(${r}) scale(${s})`;
 
 const Cup = (p: P) => (
   <g transform={T(p)}>
-    <path d="M-6 -7H6C6 0 3 3 0 3C-3 3 -6 0 -6 -7Z" fill={GOLD} stroke={GOLD_DARK} strokeWidth=".5" />
-    <path d="M-4.5 -5.5H4.5" stroke={GOLD_LIGHT} strokeWidth=".8" />
-    <rect x="-.8" y="3" width="1.6" height="5" fill={GOLD} />
-    <path d="M-4 8.5H4L3 6.5H-3Z" fill={GOLD} stroke={GOLD_DARK} strokeWidth=".4" />
+    <circle cy="-2" r="10" fill="url(#mmHalo)" />
+    <path d="M-6.5 -7H6.5C6.5 0 3.4 3.4 0 3.4C-3.4 3.4 -6.5 0 -6.5 -7Z" fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".5" />
+    <ellipse cy="-7" rx="6.5" ry="1.4" fill="#7a1a5a" stroke={GOLD_LIGHT} strokeWidth=".4" />
+    <path d="M-4.6 -5.2Q-4.6 -1 -2 1" stroke="#fff" strokeWidth=".7" fill="none" opacity=".7" />
+    <rect x="-.9" y="3.2" width="1.8" height="4.8" fill="url(#mmGoldV)" />
+    <circle cy="5.4" r="1.6" fill={ROSE} stroke={GOLD_LIGHT} strokeWidth=".3" />
+    <path d="M-4.4 8.8H4.4L3.2 6.8H-3.2Z" fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".4" />
   </g>
 );
 const Sword = (p: P) => (
   <g transform={T(p)}>
-    <path d="M-1.5 -16L0 -20L1.5 -16V6H-1.5Z" fill={SILVER} stroke="#8d86b8" strokeWidth=".4" />
-    <path d="M0 -17V5" stroke="#fff" strokeWidth=".4" />
-    <rect x="-5" y="6" width="10" height="2" rx=".8" fill={GOLD} />
-    <rect x="-.8" y="8" width="1.6" height="5" fill={WOOD} />
-    <circle cy="14" r="1.4" fill={GOLD} />
+    <path d="M-1.8 -16L0 -21L1.8 -16V6H-1.8Z" fill="url(#mmSteel)" stroke="#6a64a8" strokeWidth=".4" />
+    <path d="M0 -17V5" stroke="#fff" strokeWidth=".5" />
+    <path d="M-5.5 6Q0 4 5.5 6V8.2H-5.5Z" fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".3" />
+    <rect x="-.9" y="8" width="1.8" height="5" fill="#6a2a1a" />
+    <circle cy="14" r="1.6" fill="url(#mmGoldV)" />
+    <circle cy="-7" r="9" fill="url(#mmHalo)" opacity=".6" />
   </g>
 );
 const Wand = (p: P) => (
   <g transform={T(p)}>
-    <rect x="-1.1" y="-16" width="2.2" height="32" rx="1.1" fill={WOOD} stroke={GOLD_DARK} strokeWidth=".3" />
-    <ellipse cx="2.6" cy="-9" rx="2.4" ry="1.1" transform="rotate(40 2.6 -9)" fill={LEAF} />
-    <ellipse cx="-2.6" cy="-3" rx="2.4" ry="1.1" transform="rotate(-40 -2.6 -3)" fill={LEAF} />
-    <ellipse cx="2.6" cy="3" rx="2.4" ry="1.1" transform="rotate(40 2.6 3)" fill={LEAF} />
-    <path d="M0 -16Q-2 -19 0 -22Q2 -19 0 -16Z" fill="#ff9a3c" />
+    <rect x="-1.3" y="-16" width="2.6" height="32" rx="1.3" fill="url(#mmWood)" stroke="#5a3210" strokeWidth=".3" />
+    <ellipse cx="2.8" cy="-9" rx="2.6" ry="1.2" transform="rotate(40 2.8 -9)" fill="url(#mmLeaf)" />
+    <ellipse cx="-2.8" cy="-3" rx="2.6" ry="1.2" transform="rotate(-40 -2.8 -3)" fill="url(#mmLeaf)" />
+    <ellipse cx="2.8" cy="3" rx="2.6" ry="1.2" transform="rotate(40 2.8 3)" fill="url(#mmLeaf)" />
+    <circle cy="-20" r="7" fill="url(#mmFlame)" opacity=".85" />
+    <path d="M0 -16Q-2.4 -20 0 -25Q2.4 -20 0 -16Z" fill="#ffb347" />
+    <path d="M0 -16.5Q-1 -19 0 -22Q1 -19 0 -16.5Z" fill="#fff3a0" />
   </g>
 );
 const Star = ({ cx, cy, r, n = 5, k = 0.45, fill = GOLD, rot = -90 }: { cx: number; cy: number; r: number; n?: number; k?: number; fill?: string; rot?: number }) => {
@@ -57,9 +63,11 @@ const Star = ({ cx, cy, r, n = 5, k = 0.45, fill = GOLD, rot = -90 }: { cx: numb
 };
 const Coin = (p: P) => (
   <g transform={T(p)}>
-    <circle r="7" fill={GOLD} stroke={GOLD_DARK} strokeWidth=".6" />
-    <circle r="5.6" fill="none" stroke={GOLD_LIGHT} strokeWidth=".4" />
-    <Star cx={0} cy={0.4} r={4.6} k={0.4} fill={INK} />
+    <circle r="11" fill="url(#mmHalo)" opacity=".7" />
+    <circle r="7.2" fill="url(#mmCoin)" stroke={GOLD_DARK} strokeWidth=".6" />
+    <circle r="5.8" fill="none" stroke={GOLD_LIGHT} strokeWidth=".4" strokeDasharray=".8 .8" />
+    <Star cx={0} cy={0.4} r={4.4} k={0.4} fill="#7a1a5a" />
+    <Star cx={0} cy={0.4} r={2.6} k={0.4} fill={GOLD_LIGHT} />
   </g>
 );
 const Sun = ({ cx, cy, r, rays = 12, face = false }: { cx: number; cy: number; r: number; rays?: number; face?: boolean }) => (
@@ -92,20 +100,31 @@ const Fig = ({ x, y, s = 1, robe = "#7a45d6", trim = GOLD, skin = SKIN, hair = "
   const b = y + 4 * s;
   const arm = (dx: number, dy: number, sign: number) => (
     <g>
-      <line x1={x + sign * 5 * s} y1={b + 3 * s} x2={x + sign * dx * s} y2={b + dy * s} stroke={robe} strokeWidth={3.2 * s} strokeLinecap="round" />
-      <circle cx={x + sign * dx * s} cy={b + dy * s} r={1.5 * s} fill={skin} />
+      <line x1={x + sign * 5 * s} y1={b + 3 * s} x2={x + sign * dx * s} y2={b + dy * s} stroke={robe} strokeWidth={3.4 * s} strokeLinecap="round" />
+      <line x1={x + sign * 5 * s} y1={b + 3 * s} x2={x + sign * dx * s} y2={b + dy * s} stroke="url(#mmShadeV)" strokeWidth={3.4 * s} strokeLinecap="round" opacity=".5" />
+      <circle cx={x + sign * dx * s} cy={b + dy * s} r={1.6 * s} fill={skin} />
     </g>
   );
+  const body = `M${x - 5 * s} ${b}Q${x} ${b - 2 * s} ${x + 5 * s} ${b}L${x + 9.5 * s} ${b + hem * s}Q${x} ${b + (hem + 2) * s} ${x - 9.5 * s} ${b + hem * s}Z`;
   return (
     <g>
-      <path d={`M${x - 5 * s} ${b}Q${x} ${b - 2 * s} ${x + 5 * s} ${b}L${x + 9 * s} ${b + hem * s}L${x - 9 * s} ${b + hem * s}Z`} fill={robe} stroke={trim} strokeWidth=".5" />
-      <path d={`M${x - 8 * s} ${b + hem * s - 2 * s}H${x + 8 * s}`} stroke={trim} strokeWidth=".6" />
+      <circle cx={x} cy={y + 2 * s} r={12 * s} fill="url(#mmAura)" />
+      <path d={body} fill={robe} stroke={trim} strokeWidth=".5" />
+      <path d={body} fill="url(#mmShade)" />
+      <path d={`M${x - 1 * s} ${b + 2 * s}Q${x - 2 * s} ${b + (hem / 2) * s} ${x - 4 * s} ${b + hem * s}M${x + 2 * s} ${b + 2 * s}Q${x + 3 * s} ${b + (hem / 2) * s} ${x + 5 * s} ${b + hem * s}`} stroke="#000" strokeWidth=".4" opacity=".28" fill="none" />
+      <path d={`M${x - 9 * s} ${b + (hem - 2) * s}Q${x} ${b + (hem) * s} ${x + 9 * s} ${b + (hem - 2) * s}`} stroke={trim} strokeWidth=".8" fill="none" />
+      <path d={`M${x - 2.4 * s} ${b - 0.5 * s}L${x} ${b + 7 * s}L${x + 2.4 * s} ${b - 0.5 * s}`} fill="none" stroke={trim} strokeWidth=".6" />
       {arms === "up" && <>{arm(11, -10, -1)}{arm(11, -10, 1)}</>}
       {arms === "out" && <>{arm(12, 6, -1)}{arm(12, 6, 1)}</>}
       {arms === "down" && <>{arm(7, 14, -1)}{arm(7, 14, 1)}</>}
+      <path d={`M${x - 3.6 * s} ${y}Q${x - 6.4 * s} ${y + 6 * s} ${x - 5 * s} ${y + 11 * s}L${x - 3 * s} ${y + 10 * s}Q${x - 3.6 * s} ${y + 5 * s} ${x - 2.6 * s} ${y + 2 * s}ZM${x + 3.6 * s} ${y}Q${x + 6.4 * s} ${y + 6 * s} ${x + 5 * s} ${y + 11 * s}L${x + 3 * s} ${y + 10 * s}Q${x + 3.6 * s} ${y + 5 * s} ${x + 2.6 * s} ${y + 2 * s}Z`} fill={hair} />
       <circle cx={x} cy={y} r={4 * s} fill={skin} />
-      <path d={`M${x - 4 * s} ${y}a${4 * s} ${4 * s} 0 0 1 ${8 * s} 0Z`} fill={hair} />
-      {hat === "crown" && <path d={`M${x - 4 * s} ${y - 3 * s}L${x - 4 * s} ${y - 7 * s}L${x - 2 * s} ${y - 4.5 * s}L${x} ${y - 8 * s}L${x + 2 * s} ${y - 4.5 * s}L${x + 4 * s} ${y - 7 * s}L${x + 4 * s} ${y - 3 * s}Z`} fill={GOLD} />}
+      <ellipse cx={x + 1.2 * s} cy={y + 0.6 * s} rx={2.4 * s} ry={3.2 * s} fill="url(#mmShadeV)" opacity=".35" />
+      <path d={`M${x - 4.2 * s} ${y + 0.4 * s}a${4.2 * s} ${4.2 * s} 0 0 1 ${8.4 * s} 0Q${x} ${y - 2.4 * s} ${x - 4.2 * s} ${y + 0.4 * s}Z`} fill={hair} />
+      <circle cx={x - 1.5 * s} cy={y + 0.3 * s} r={0.45 * s} fill="#2a1030" />
+      <circle cx={x + 1.5 * s} cy={y + 0.3 * s} r={0.45 * s} fill="#2a1030" />
+      <path d={`M${x - 1 * s} ${y + 2 * s}Q${x} ${y + 2.6 * s} ${x + 1 * s} ${y + 2 * s}`} stroke="#b0405a" strokeWidth={0.45 * s} fill="none" />
+      {hat === "crown" && <path d={`M${x - 4 * s} ${y - 3 * s}L${x - 4 * s} ${y - 7 * s}L${x - 2 * s} ${y - 4.5 * s}L${x} ${y - 8 * s}L${x + 2 * s} ${y - 4.5 * s}L${x + 4 * s} ${y - 7 * s}L${x + 4 * s} ${y - 3 * s}Z`} fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".3" />}
       {hat === "cap" && <path d={`M${x - 4.4 * s} ${y - 1 * s}Q${x} ${y - 8 * s} ${x + 4.4 * s} ${y - 1 * s}Z`} fill={trim} />}
     </g>
   );
@@ -113,7 +132,9 @@ const Fig = ({ x, y, s = 1, robe = "#7a45d6", trim = GOLD, skin = SKIN, hair = "
 const Ground = ({ y = 92, c = "#2a1a5a", c2 = "#3b2480" }: { y?: number; c?: string; c2?: string }) => (
   <g>
     <path d={`M8 ${y}Q30 ${y - 6} 50 ${y - 1}T92 ${y - 2}V112H8Z`} fill={c2} />
+    <path d={`M8 ${y}Q30 ${y - 6} 50 ${y - 1}T92 ${y - 2}`} fill="none" stroke={GOLD_LIGHT} strokeWidth=".6" opacity=".55" />
     <path d={`M8 ${y + 8}Q35 ${y + 2} 60 ${y + 7}T92 ${y + 5}V112H8Z`} fill={c} />
+    <path d={`M8 ${y}V112H92V${y - 2}`} fill="url(#mmGroundShade)" />
   </g>
 );
 const Sea = ({ y = 82, c = "#0f5f7a" }: { y?: number; c?: string }) => (
@@ -769,35 +790,143 @@ const resolveScene = (id: number): Scene => {
   return { sky: night ? ["#1b1a4a", "#a0482c"] : sky, draw: k < 10 ? minorScene(suit, k + 1) : courtScene(suit, k - 10) };
 };
 
+const NEB: Record<string, [string, string, string]> = {
+  major: ["#b02ad8", "#2a5be0", "#ff4fa0"],
+  wands: ["#ff5a2a", "#c01a6a", "#ffb02a"],
+  cups: ["#14b8d8", "#3a4ae0", "#a02ad8"],
+  swords: ["#5a5af0", "#b02ad8", "#14c8e8"],
+  pentacles: ["#14c88a", "#2a8ae0", "#e8b02a"],
+};
+
+const Defs = () => (
+  <>
+    <linearGradient id="mmGoldV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stopColor="#fff2b8" /><stop offset=".45" stopColor="#ffc93c" /><stop offset="1" stopColor="#a8650c" />
+    </linearGradient>
+    <linearGradient id="mmGoldFrame" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="150">
+      <stop offset="0" stopColor="#fff2b8" /><stop offset=".35" stopColor="#e8a82a" /><stop offset=".65" stopColor="#fff0a0" /><stop offset="1" stopColor="#b8730e" />
+    </linearGradient>
+    <linearGradient id="mmSteel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stopColor="#9aa4d8" /><stop offset=".5" stopColor="#ffffff" /><stop offset="1" stopColor="#7a84c0" />
+    </linearGradient>
+    <linearGradient id="mmWood" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stopColor="#7a4a14" /><stop offset=".5" stopColor="#d89a40" /><stop offset="1" stopColor="#5a3210" />
+    </linearGradient>
+    <linearGradient id="mmLeaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stopColor="#7af0a0" /><stop offset="1" stopColor="#0a8a5a" />
+    </linearGradient>
+    <linearGradient id="mmShade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stopColor="#fff" stopOpacity=".28" /><stop offset=".45" stopColor="#fff" stopOpacity="0" /><stop offset="1" stopColor="#000" stopOpacity=".5" />
+    </linearGradient>
+    <linearGradient id="mmShadeV" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stopColor="#fff" stopOpacity=".2" /><stop offset="1" stopColor="#000" stopOpacity=".5" />
+    </linearGradient>
+    <linearGradient id="mmGroundShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stopColor="#ffb86a" stopOpacity=".28" /><stop offset=".5" stopColor="#000" stopOpacity="0" /><stop offset="1" stopColor="#000" stopOpacity=".55" />
+    </linearGradient>
+    <radialGradient id="mmHalo">
+      <stop offset="0" stopColor="#fff2b8" stopOpacity=".7" /><stop offset="1" stopColor="#ffc93c" stopOpacity="0" />
+    </radialGradient>
+    <radialGradient id="mmAura">
+      <stop offset="0" stopColor="#fff2d8" stopOpacity=".38" /><stop offset=".6" stopColor="#d89aff" stopOpacity=".12" /><stop offset="1" stopColor="#d89aff" stopOpacity="0" />
+    </radialGradient>
+    <radialGradient id="mmFlame">
+      <stop offset="0" stopColor="#fff3a0" stopOpacity=".9" /><stop offset=".5" stopColor="#ff8a2a" stopOpacity=".4" /><stop offset="1" stopColor="#ff4a2a" stopOpacity="0" />
+    </radialGradient>
+    <radialGradient id="mmCoin" cx=".35" cy=".3" r=".9">
+      <stop offset="0" stopColor="#fff6c0" /><stop offset=".5" stopColor="#ffc93c" /><stop offset="1" stopColor="#a8650c" />
+    </radialGradient>
+    <radialGradient id="mmVignette" cx=".5" cy=".45" r=".75">
+      <stop offset=".55" stopColor="#000" stopOpacity="0" /><stop offset="1" stopColor="#05020f" stopOpacity=".75" />
+    </radialGradient>
+    <filter id="mmPaint" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".05" numOctaves="2" seed="7" result="n" />
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="1.5" xChannelSelector="R" yChannelSelector="G" result="d" />
+      <feColorMatrix in="d" type="saturate" values="1.45" result="sat" />
+      <feComponentTransfer in="sat" result="con">
+        <feFuncR type="linear" slope="1.12" intercept="-.04" />
+        <feFuncG type="linear" slope="1.12" intercept="-.04" />
+        <feFuncB type="linear" slope="1.12" intercept="-.04" />
+      </feComponentTransfer>
+      <feGaussianBlur in="con" stdDeviation="1.6" result="bl" />
+      <feComponentTransfer in="bl" result="bloom"><feFuncA type="linear" slope=".55" /></feComponentTransfer>
+      <feBlend in="con" in2="bloom" mode="screen" />
+    </filter>
+    <filter id="mmGrain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="3" />
+      <feColorMatrix type="matrix" values="0 0 0 0 .6  0 0 0 0 .5  0 0 0 0 .4  0 0 0 .5 0" />
+    </filter>
+  </>
+);
+
+const Atmosphere = ({ id, kind }: { id: number; kind: string }) => {
+  const [c1, c2, c3] = NEB[kind];
+  const r = (n: number) => ((id * 9301 + n * 49297) % 233280) / 233280;
+  return (
+    <g>
+      <ellipse cx={20 + r(1) * 60} cy={20 + r(2) * 30} rx="38" ry="22" fill={c1} opacity=".38" transform={`rotate(${r(3) * 60 - 30} 50 40)`} />
+      <ellipse cx={20 + r(4) * 60} cy={50 + r(5) * 30} rx="34" ry="20" fill={c2} opacity=".36" transform={`rotate(${r(6) * 80 - 40} 50 70)`} />
+      <ellipse cx={20 + r(7) * 60} cy={30 + r(8) * 40} rx="22" ry="14" fill={c3} opacity=".3" />
+      <g opacity=".09">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <polygon key={i} points={`50,16 ${-6 + i * 20},112 ${2 + i * 20},112`} fill="#fff4c8" />
+        ))}
+      </g>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <circle key={i} cx={10 + r(10 + i) * 80} cy={14 + r(20 + i) * 60} r={1.2 + r(30 + i) * 2.2} fill="#fff4c8" opacity=".25" />
+      ))}
+    </g>
+  );
+};
+
+const Ornament = () => (
+  <g fill="none" stroke="url(#mmGoldFrame)">
+    <rect x="4" y="5" width="92" height="110" rx="6" strokeWidth="1.4" />
+    <rect x="6.6" y="7.6" width="86.8" height="104.8" rx="4" strokeWidth=".5" />
+    <rect x="8" y="10" width="84" height="102" rx="2.5" strokeWidth=".9" />
+    {[[8, 10, 1, 1], [92, 10, -1, 1], [8, 112, 1, -1], [92, 112, -1, -1]].map(([x, y, sx, sy], i) => (
+      <g key={i} transform={`translate(${x} ${y}) scale(${sx} ${sy})`}>
+        <path d="M0 0Q8 0 8 6Q4 6 4 3Q2 8 0 10M0 0Q0 8 6 8" strokeWidth=".6" />
+        <circle cx="2.4" cy="2.4" r="1.5" fill="url(#mmGoldFrame)" stroke="none" />
+      </g>
+    ))}
+    <path d="M42 10Q50 4 58 10" strokeWidth=".7" />
+    <path d="M46 112Q50 117 54 112" strokeWidth=".7" />
+    <path d="M50 4.2l2.2 3.6L50 11.4l-2.2 -3.6Z" fill="url(#mmGoldFrame)" stroke="none" />
+  </g>
+);
+
 export default function TarotCardArt({ id, className = "" }: { id: number; className?: string }) {
   const scene = resolveScene(id);
   const gid = `tca${id}`;
+  const kind = id < 22 ? "major" : SUITS[Math.floor((id - 22) / 14)] ?? "major";
   return (
     <svg viewBox="0 0 100 150" preserveAspectRatio="xMidYMin slice" className={className} aria-hidden="true" focusable="false">
       <defs>
+        <Defs />
         <linearGradient id={`${gid}s`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor={scene.sky[0]} />
+          <stop offset=".55" stopColor={scene.sky[0]} stopOpacity=".6" />
           <stop offset="1" stopColor={scene.sky[1]} />
         </linearGradient>
         <linearGradient id={`${gid}f`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#1d123e" />
-          <stop offset="1" stopColor="#070412" />
+          <stop offset="0" stopColor="#1d0f45" />
+          <stop offset="1" stopColor="#05020f" />
         </linearGradient>
         <clipPath id={`${gid}c`}>
-          <rect x="8" y="10" width="84" height="102" rx="3" />
+          <rect x="8" y="10" width="84" height="102" rx="2.5" />
         </clipPath>
       </defs>
       <rect width="100" height="150" fill={`url(#${gid}f)`} />
       <g clipPath={`url(#${gid}c)`}>
         <rect x="8" y="10" width="84" height="102" fill={`url(#${gid}s)`} />
+        <Atmosphere id={id} kind={kind} />
         <Stars id={id} />
-        {scene.draw}
+        <g filter="url(#mmPaint)">{scene.draw}</g>
+        <rect x="8" y="10" width="84" height="102" fill="url(#mmVignette)" />
+        <rect x="8" y="10" width="84" height="102" filter="url(#mmGrain)" opacity=".16" style={{ mixBlendMode: "overlay" }} />
       </g>
-      <rect x="8" y="10" width="84" height="102" rx="3" fill="none" stroke={GOLD} strokeWidth=".8" />
-      <rect x="5" y="7" width="90" height="108" rx="5" fill="none" stroke={GOLD} strokeWidth=".3" opacity=".6" />
-      {[[8, 10], [92, 10], [8, 112], [92, 112]].map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r="1.6" fill={GOLD} />
-      ))}
+      <Ornament />
     </svg>
   );
 }
