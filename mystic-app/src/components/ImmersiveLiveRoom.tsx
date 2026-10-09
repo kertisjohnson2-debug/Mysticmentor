@@ -32,12 +32,14 @@ import {
   Volume2,
   VolumeX,
   Wand2,
-  X,
-  type LucideIcon
+  X
 } from "lucide-react";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import { tarotPositionContext } from "../data/tarotInterpretations";
 import type { LiveVideoStatus } from "../lib/liveVideo";
+import TarotCardArt from "./TarotCardArt";
+import LiveTarotCardDisplayV2 from "./LiveTarotCardDisplayV2";
+import cardBackImage from "../assets/images/mystical_card_back_1790704964638.jpg";
 
 type LiveTopic =
   | "Tarot & Spirituality"
@@ -50,6 +52,7 @@ type LiveTopic =
 
 type Broadcaster = {
   id: string;
+  profileUid?: string;
   name: string;
   avatar: string;
   avatarUrl?: string;
@@ -62,31 +65,10 @@ type Broadcaster = {
   image?: string;
 };
 
-type ChatLine = { id: number | string; sender: string; text: string; kind?: "gift" | "system" };
+type ChatLine = { id: number | string; sender: string; senderUid?: string; avatarUrl?: string; text: string; kind?: "gift" | "system" };
 type LiveGift = { name: string; emoji: string; gems: number };
 export type LiveSpread = "single" | "three";
 export type LiveReadingCard = { card: TarotCard; isReversed: boolean; isRevealed: boolean };
-
-const cardBackImage = "/src/assets/images/mystical_card_back_1790704964638.jpg";
-const tarotIcons: Record<string, LucideIcon> = {
-  Compass,
-  Wand2,
-  Moon,
-  Crown,
-  Shield,
-  BookOpen,
-  Heart,
-  Sparkles,
-  Activity,
-  Eye,
-  RefreshCw,
-  Scale,
-  Anchor,
-  Skull,
-  MoonStar,
-  Sun,
-  Gem
-};
 
 const gifts: LiveGift[] = [
   { name: "Heart", emoji: "💗", gems: 10 },
@@ -101,7 +83,6 @@ function formatCount(value: number) {
 }
 
 const chatNameColors = ["text-fuchsia-200", "text-sky-200", "text-amber-200", "text-emerald-200", "text-violet-200", "text-rose-200"];
-
 function chatNameColor(sender: string) {
   const hash = [...sender].reduce((value, character) => value + character.charCodeAt(0), 0);
   return chatNameColors[hash % chatNameColors.length];
@@ -132,6 +113,7 @@ type Props = {
   onTogglePause: () => void;
   onUpdateBroadcastInfo: (title: string, description: string, hashtags: string) => void;
   onToggleFollow: () => void;
+  onViewMemberProfile: (uid: string) => void;
   onHeart: () => void;
   onChooseSpread: (spread: LiveSpread) => void;
   onStartReading: () => void;
@@ -195,6 +177,7 @@ export default function ImmersiveLiveRoom({
   onTogglePause,
   onUpdateBroadcastInfo,
   onToggleFollow,
+  onViewMemberProfile,
   onHeart,
   onChooseSpread,
   onStartReading,
@@ -218,6 +201,10 @@ export default function ImmersiveLiveRoom({
   isGiftSheetOpen,
   setIsGiftSheetOpen
 }: Props) {
+  const [isV2Open, setIsV2Open] = useState(false);
+  const [isLiveTarotBookOpen, setIsLiveTarotBookOpen] = useState(false);
+  const [liveTarotBookSpread, setLiveTarotBookSpread] = useState<LiveSpread>("three");
+  const [liveTarotBookCards, setLiveTarotBookCards] = useState<LiveReadingCard[]>([]);
   const [isReadingControlsOpen, setIsReadingControlsOpen] = useState(false);
   const [isCardPickerOpen, setIsCardPickerOpen] = useState(false);
   const [isBroadcastInfoOpen, setIsBroadcastInfoOpen] = useState(false);
@@ -272,6 +259,15 @@ export default function ImmersiveLiveRoom({
   const hasCompleteManualSelection = selectedManualCardIds.length === spreadSize && new Set(selectedManualCardIds).size === spreadSize;
   const revealedReadingCards = readingCards.flatMap((item, index) => item.isRevealed ? [{ item, index }] : []);
   const hasRevealedReading = revealedReadingCards.length > 0;
+  const openLiveTarotBook = () => {
+    const selectedCards = [...TAROT_DECK.filter((card) => !card.isHidden)]
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3)
+      .map((card) => ({ card, isReversed: Math.random() > 0.7, isRevealed: false }));
+    setLiveTarotBookCards(selectedCards);
+    setLiveTarotBookSpread("three");
+    setIsLiveTarotBookOpen(true);
+  };
 
   useEffect(() => {
     if (!hasRevealedReading) setIsReadingPanelOpen(false);
@@ -313,10 +309,10 @@ export default function ImmersiveLiveRoom({
       </header>
 
       <div className={`absolute left-4 ${isBroadcaster ? "right-44 sm:right-44" : "right-[4.75rem] sm:right-24"} ${readingCards.length > 0 ? "max-md:right-[13rem]!" : ""} top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 flex items-center gap-3 sm:left-6`}>
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/60 bg-[#25182e]/85 font-display text-xs font-semibold text-mystic-gold shadow-lg backdrop-blur-md">{broadcaster.avatarUrl ? <img src={broadcaster.avatarUrl} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div>
+        <button type="button" onClick={() => broadcaster.profileUid && onViewMemberProfile(broadcaster.profileUid)} disabled={!broadcaster.profileUid} aria-label={`View ${broadcaster.name}'s profile`} className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/60 bg-[#25182e]/85 font-display text-xs font-semibold text-mystic-gold shadow-lg backdrop-blur-md transition enabled:hover:border-mystic-gold enabled:active:scale-95 disabled:cursor-default">{broadcaster.avatarUrl ? <img src={broadcaster.avatarUrl} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</button>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-semibold text-white drop-shadow">{broadcaster.name}</p>
+            <button type="button" onClick={() => broadcaster.profileUid && onViewMemberProfile(broadcaster.profileUid)} disabled={!broadcaster.profileUid} className="truncate text-left text-sm font-semibold text-white drop-shadow transition enabled:hover:text-mystic-gold disabled:cursor-default">{broadcaster.name}</button>
             {!isBroadcaster && <button onClick={onToggleFollow} className={`min-h-8 shrink-0 rounded-full border px-3 text-[10px] font-semibold transition active:scale-95 ${isFollowing ? "border-teal-200/40 bg-teal-900/55 text-teal-100" : "border-mystic-gold/70 bg-black/30 text-mystic-gold backdrop-blur-md"}`}>{isFollowing ? "Following" : "Follow"}</button>}
           </div>
           <p className="mt-0.5 truncate text-[10px] font-medium text-white/70">{broadcaster.topic}</p>
@@ -328,10 +324,55 @@ export default function ImmersiveLiveRoom({
 
       {isPaused && <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-black/55 px-5 py-3 font-display text-sm text-white shadow-xl backdrop-blur-md">Broadcast paused</div>}
 
-      {readingCards.length > 0 && <section aria-label="Live Tarot reading" className="absolute left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 w-[8.5rem] md:left-auto md:right-[5.25rem] md:top-[calc(env(safe-area-inset-top)+6.75rem)] md:w-[min(38vw,20rem)] md:translate-x-0">
+      {isV2Open && <section aria-label="New Tarot display test" className="absolute left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 w-[min(92vw,32rem)] md:left-auto md:right-[5.25rem] md:top-[calc(env(safe-area-inset-top)+6.75rem)] md:translate-x-0">
+        <LiveTarotCardDisplayV2 onDone={() => setIsV2Open(false)} />
+      </section>}
+
+      {isLiveTarotBookOpen && (
+        <section aria-label="Live Tarot card display" className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 mx-auto w-auto max-w-xl px-2 sm:inset-x-6">
+          <div className="flex items-center justify-between gap-3">
+            <div className="grid grid-cols-2 rounded-lg border border-white/15 bg-black/45 p-1 shadow-lg backdrop-blur-md">
+              <button type="button" onClick={() => setLiveTarotBookSpread("single")} aria-pressed={liveTarotBookSpread === "single"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>1 Card</button>
+              <button type="button" onClick={() => setLiveTarotBookSpread("three")} aria-pressed={liveTarotBookSpread === "three"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>3 Cards</button>
+            </div>
+            <button type="button" onClick={() => { setIsLiveTarotBookOpen(false); setLiveTarotBookCards([]); }} aria-label="Close Tarot card display" className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-slate-200 shadow-lg backdrop-blur-md transition hover:border-mystic-gold/50 hover:text-mystic-gold">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className={`mx-auto mt-4 grid items-start gap-3 ${liveTarotBookSpread === "single" ? "max-w-[10rem] grid-cols-1" : "grid-cols-3"}`}>
+            {liveTarotBookCards.slice(0, liveTarotBookSpread === "single" ? 1 : 3).map((item, index) => {
+              const position = liveTarotBookSpread === "single" ? "Guidance" : ["Past", "Present", "Future"][index];
+              return (
+                <div key={`${item.card.id}-${index}`} className="flex min-w-0 flex-col items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-200 font-display">{position}</span>
+                  <div className="perspective-1000 w-full aspect-[2/3]">
+                    <button
+                      type="button"
+                      onClick={() => setLiveTarotBookCards((cards) => cards.map((card, cardIndex) => cardIndex === index ? { ...card, isRevealed: true } : card))}
+                      disabled={item.isRevealed}
+                      aria-label={item.isRevealed ? `${item.card.name}, ${item.isReversed ? "reversed" : "upright"}` : `Reveal ${position.toLowerCase()} card`}
+                      className={`relative h-full w-full duration-700 transform-style-3d cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-mystic-gold ${item.isRevealed ? "rotate-y-180" : ""}`}
+                    >
+                      <div className="absolute inset-0 h-full w-full overflow-hidden rounded-lg bg-cover bg-center shadow-[0_8px_28px_rgba(0,0,0,.55)] backface-hidden" style={{ backgroundImage: `url(${cardBackImage})` }} />
+                      <div className={`absolute inset-0 h-full w-full overflow-hidden rounded-lg backface-hidden rotate-y-180 ${item.isReversed ? "rotate-180" : ""}`}>
+                        <TarotCardArt id={item.card.id} className="absolute inset-0 h-full w-full rounded-lg pointer-events-none" />
+                        <h3 className="absolute inset-x-2 bottom-2 z-10 truncate text-center font-display text-[9px] font-bold leading-tight tracking-tight text-white drop-shadow">
+                          {item.card.name}
+                        </h3>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {false && readingCards.length > 0 && <section aria-label="Live Tarot reading" className="absolute left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+14rem)] z-10 w-[8.5rem] md:left-auto md:right-[5.25rem] md:top-[calc(env(safe-area-inset-top)+16rem)] md:w-[min(38vw,20rem)] md:translate-x-0">
         <div className={`grid items-start gap-1 md:gap-2 ${readingSpread === "single" ? "grid-cols-1 justify-items-center" : "grid-cols-3"}`}>
           {readingCards.map((item, index) => {
-            const CardIcon = tarotIcons[item.card.iconName] ?? Sparkles;
             const position = readingSpread === "single" ? "Guidance" : ["Past", "Present", "Future"][index];
             return <div key={`${item.card.id}-${index}`} className="flex min-w-0 flex-col items-center gap-1.5">
               <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-mystic-gold drop-shadow sm:text-[10px]">{position}</span>
@@ -341,15 +382,9 @@ export default function ImmersiveLiveRoom({
                     <span className="absolute inset-1.5 rounded-md border border-mystic-gold/35" />
                     <span className="flex h-6 w-6 items-center justify-center rounded-full border border-mystic-gold/40 bg-black/55 text-mystic-gold shadow-[0_0_24px_rgba(243,198,95,.28)] md:h-9 md:w-9"><Sparkles className="h-4 w-4 md:h-5 md:w-5" /></span>
                   </span>
-                  <span className={`backface-hidden rotate-y-180 absolute inset-0 flex flex-col items-center justify-between overflow-hidden rounded-lg border-2 border-mystic-gold/80 bg-[radial-gradient(circle_at_50%_40%,rgba(243,198,95,.17),transparent_42%),linear-gradient(155deg,#302044,#100b1a_72%)] p-1 text-center md:p-2 shadow-[0_8px_30px_rgba(0,0,0,.6)] ${item.isReversed ? "rotate-180" : ""}`}>
+                  <span className={`backface-hidden rotate-y-180 absolute inset-0 overflow-hidden rounded-lg border-2 border-mystic-gold/80 bg-[#100b1a]/20 shadow-[0_8px_30px_rgba(0,0,0,.6)] ${item.isReversed ? "rotate-180" : ""}`}>
                     <span className="absolute inset-1 rounded-md border border-mystic-gold/25" />
-                    <span className="relative hidden text-[8px] font-mono uppercase tracking-[0.12em] text-mystic-gold/80 md:block">Arcana {item.card.number}</span>
-                    <span className="relative flex min-h-0 flex-col items-center justify-center">
-                      <span className="mb-1 flex h-6 w-6 items-center justify-center rounded-full border border-mystic-gold/45 bg-mystic-gold/10 text-mystic-gold shadow-[0_0_24px_rgba(243,198,95,.18)] md:mb-1.5 md:h-9 md:w-9"><CardIcon className="h-4 w-4 md:h-5 md:w-5" /></span>
-                      <span className="line-clamp-2 font-display text-[7px] font-semibold leading-tight text-white md:text-xs">{item.card.name}</span>
-                      <span className="mt-0.5 text-[6px] font-semibold uppercase tracking-wider text-teal-200 md:mt-1 md:text-[7px]">{item.isReversed ? "Reversed" : "Upright"}</span>
-                    </span>
-                    <span className="relative line-clamp-2 hidden text-[7px] leading-tight text-white/60 md:block">{item.card.description}</span>
+                    <TarotCardArt id={item.card.id} className="pointer-events-none absolute inset-0 h-full w-full rounded-lg" />
                   </span>
                 </span>
               </button>
@@ -370,7 +405,7 @@ export default function ImmersiveLiveRoom({
           <button onClick={() => { chatInputRef.current?.focus(); }} aria-label="Open live chat" title="Open chat" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-teal-100 shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><MessageCircle className="h-5 w-5" /><span className="text-[8px] font-semibold">Chat</span></button>
           <button onClick={onShare} aria-label="Share broadcast" title="Share broadcast" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-white shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Share2 className="h-5 w-5" /><span className="text-[8px] font-semibold">Share</span></button>
         </>}
-        {canUseTarot && <button onClick={() => setIsReadingControlsOpen(true)} aria-label="Open live reading controls" title="Live reading controls" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Sparkles className="h-5 w-5" /><span className="text-[8px] font-semibold">Tarot</span></button>}
+        {canUseTarot && <button onClick={() => setIsV2Open(true)} aria-label="Open Tarot reading" title="Tarot" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Sparkles className="h-5 w-5" /><span className="text-[8px] font-semibold">Tarot</span></button>}
         {isBroadcaster && <>
           <button onClick={onTogglePause} aria-label={isPaused ? "Resume broadcast" : "Pause broadcast"} title={isPaused ? "Resume broadcast" : "Pause broadcast"} className="flex h-11 w-11 items-center justify-center rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90">{isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button>
           <button onClick={() => setIsEndConfirmationOpen(true)} aria-label="End broadcast" title="End broadcast" className="flex h-11 w-11 items-center justify-center rounded-full border border-rose-300/35 bg-black/35 text-rose-200 shadow-lg backdrop-blur-md transition hover:bg-rose-950/60 active:scale-90"><Video className="h-4 w-4" /></button>
@@ -378,6 +413,11 @@ export default function ImmersiveLiveRoom({
         </>}
 
       </aside>
+
+      <button type="button" onClick={openLiveTarotBook} aria-label="Open Live Tarot card display" title="Live Tarot cards" className="absolute bottom-[calc(6.25rem+env(safe-area-inset-bottom))] left-2 z-20 flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90 md:bottom-auto md:left-5 md:top-[43%] md:-translate-y-1/2">
+        <BookOpen className="h-5 w-5" />
+        <span className="text-[8px] font-semibold">Tarot</span>
+      </button>
 
       {isBroadcaster && showInterpretations && hasRevealedReading && <div className="pointer-events-none absolute inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-20 px-4 sm:px-6 md:hidden">
         <div className="pointer-events-auto ml-0 mr-[4.75rem] flex flex-col gap-1.5">
@@ -405,7 +445,7 @@ export default function ImmersiveLiveRoom({
 
       <div className={`absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-4 right-[4.75rem] z-10 flex ${readingCards.length > 0 ? "max-h-[15dvh]" : "max-h-[28dvh]"} flex-col justify-end overflow-y-auto overflow-x-hidden pr-1 sm:bottom-[calc(6rem+env(safe-area-inset-bottom))] sm:left-6 sm:right-24`}>
         <div className="min-w-0 max-w-full space-y-1.5 px-2 pb-2 pt-5">
-          {chat.slice(-8).map((line) => <p key={line.id} className={`max-w-full whitespace-normal break-words text-xs leading-relaxed [overflow-wrap:anywhere] [text-shadow:0_1px_3px_rgba(0,0,0,.9),0_0_8px_rgba(0,0,0,.5)] ${line.kind === "gift" ? "text-mystic-gold" : line.kind === "system" ? "text-teal-200" : "text-white"}`}><strong className={`mr-1 font-semibold ${chatNameColor(line.sender)}`}>{line.sender}</strong>{line.text}</p>)}
+          {chat.slice(-8).map((line) => <p key={line.id} className={`max-w-full whitespace-normal break-words text-xs leading-relaxed [overflow-wrap:anywhere] [text-shadow:0_1px_3px_rgba(0,0,0,.9),0_0_8px_rgba(0,0,0,.5)] ${line.kind === "gift" ? "text-mystic-gold" : line.kind === "system" ? "text-teal-200" : "text-white"}`}>{line.senderUid && <button type="button" onClick={() => onViewMemberProfile(line.senderUid!)} aria-label={`View ${line.sender}'s profile`} className="mr-1 inline-flex h-5 w-5 shrink-0 align-middle items-center justify-center overflow-hidden rounded-full border border-white/30 bg-[#25182e]/85 text-[8px] font-bold text-mystic-gold transition hover:border-mystic-gold active:scale-95">{line.avatarUrl ? <img src={line.avatarUrl} alt="" className="h-full w-full object-cover" /> : line.sender.slice(0, 2).toUpperCase()}</button>}<strong className={`mr-1 font-semibold ${chatNameColor(line.sender)}`}>{line.senderUid ? <button type="button" onClick={() => onViewMemberProfile(line.senderUid!)} className="transition hover:text-mystic-gold">{line.sender}</button> : line.sender}</strong>{line.text}</p>)}
         </div>
         {isBroadcaster && <div className="mt-1 flex items-center gap-2 px-2 text-[10px] text-white/75"><Gem className="h-3.5 w-3.5 text-mystic-gold" />{formatCount(giftsReceived)} Gems received <span className="text-white/30">·</span>{currentRank}</div>}
       </div>

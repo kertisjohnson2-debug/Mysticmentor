@@ -1,9 +1,17 @@
 import React from "react";
+import artworkMapping from "../../../tarot-artwork-mapping.json";
+
+type TarotArtworkMapping = { id: number; name: string; filename: string };
+const artworkById = new Map(
+  artworkMapping.map(({ id, filename }) => [id, `/tarot/${filename}`]),
+);
+if (artworkMapping.length !== 78 || artworkById.size !== 78) {
+  throw new Error("Tarot artwork mapping must resolve all 78 local card images.");
+}
 
 /**
- * Local vector card-face artwork for all 78 Mysticmentor Tarot cards.
+ * Artwork frame for all 78 Mysticmentor Tarot cards.
  * Keyed by card id (0-21 Major Arcana, 22-35 Wands, 36-49 Cups, 50-63 Swords, 64-77 Pentacles).
- * Coordinate space is 100 x 150; the scene lives in the upper ~110 units.
  */
 
 const GOLD = "#ffcf4d";
@@ -98,34 +106,49 @@ const Cloud = ({ x, y, s = 1, fill = "#cfc4ee" }: { x: number; y: number; s?: nu
 );
 const Fig = ({ x, y, s = 1, robe = "#7a45d6", trim = GOLD, skin = SKIN, hair = "#3b2a1a", arms = "down", hem = 30, hat }: { x: number; y: number; s?: number; robe?: string; trim?: string; skin?: string; hair?: string; arms?: "down" | "up" | "out" | "none"; hem?: number; hat?: "crown" | "cap" | "none" }) => {
   const b = y + 4 * s;
-  const arm = (dx: number, dy: number, sign: number) => (
-    <g>
-      <line x1={x + sign * 5 * s} y1={b + 3 * s} x2={x + sign * dx * s} y2={b + dy * s} stroke={robe} strokeWidth={3.4 * s} strokeLinecap="round" />
-      <line x1={x + sign * 5 * s} y1={b + 3 * s} x2={x + sign * dx * s} y2={b + dy * s} stroke="url(#mmShadeV)" strokeWidth={3.4 * s} strokeLinecap="round" opacity=".5" />
-      <circle cx={x + sign * dx * s} cy={b + dy * s} r={1.6 * s} fill={skin} />
-    </g>
-  );
-  const body = `M${x - 5 * s} ${b}Q${x} ${b - 2 * s} ${x + 5 * s} ${b}L${x + 9.5 * s} ${b + hem * s}Q${x} ${b + (hem + 2) * s} ${x - 9.5 * s} ${b + hem * s}Z`;
+  const arm = (dx: number, dy: number, sign: number) => {
+    const sx = x + sign * 5 * s, sy = b + 3 * s, hx = x + sign * dx * s, hy = b + dy * s;
+    const mx = (sx + hx) / 2 + sign * 2.4 * s, my = (sy + hy) / 2 + 1.5 * s;
+    return (
+      <g>
+        <path d={`M${sx} ${sy - 1.4 * s}Q${mx + sign * 2 * s} ${my - 1 * s} ${hx + sign * 2.4 * s} ${hy + 1 * s}Q${mx - sign * 0.5 * s} ${my + 3.4 * s} ${sx} ${sy + 2.4 * s}Z`} fill={robe} stroke={trim} strokeWidth=".35" />
+        <path d={`M${sx} ${sy - 1.4 * s}Q${mx + sign * 2 * s} ${my - 1 * s} ${hx + sign * 2.4 * s} ${hy + 1 * s}Q${mx - sign * 0.5 * s} ${my + 3.4 * s} ${sx} ${sy + 2.4 * s}Z`} fill="url(#mmShadeV)" opacity=".55" />
+        <circle cx={hx} cy={hy} r={1.5 * s} fill={skin} />
+        <circle cx={hx - 0.4 * s} cy={hy - 0.4 * s} r={0.7 * s} fill="#fff" opacity=".3" />
+      </g>
+    );
+  };
+  const body = `M${x - 4.6 * s} ${b}Q${x} ${b - 2.4 * s} ${x + 4.6 * s} ${b}Q${x + 6 * s} ${b + 10 * s} ${x + 5 * s} ${b + 13 * s}L${x + 10.5 * s} ${b + hem * s}Q${x} ${b + (hem + 3) * s} ${x - 10.5 * s} ${b + hem * s}L${x - 5 * s} ${b + 13 * s}Q${x - 6 * s} ${b + 10 * s} ${x - 4.6 * s} ${b}Z`;
   return (
     <g>
-      <circle cx={x} cy={y + 2 * s} r={12 * s} fill="url(#mmAura)" />
+      <circle cx={x} cy={y + 2 * s} r={14 * s} fill="url(#mmAura)" />
+      <path d={`M${x - 4 * s} ${y - 1 * s}Q${x - 9 * s} ${y + 8 * s} ${x - 7 * s} ${y + 22 * s}Q${x - 3 * s} ${y + 17 * s} ${x} ${y + 17 * s}Q${x + 3 * s} ${y + 17 * s} ${x + 7 * s} ${y + 22 * s}Q${x + 9 * s} ${y + 8 * s} ${x + 4 * s} ${y - 1 * s}Z`} fill={hair} />
       <path d={body} fill={robe} stroke={trim} strokeWidth=".5" />
       <path d={body} fill="url(#mmShade)" />
-      <path d={`M${x - 1 * s} ${b + 2 * s}Q${x - 2 * s} ${b + (hem / 2) * s} ${x - 4 * s} ${b + hem * s}M${x + 2 * s} ${b + 2 * s}Q${x + 3 * s} ${b + (hem / 2) * s} ${x + 5 * s} ${b + hem * s}`} stroke="#000" strokeWidth=".4" opacity=".28" fill="none" />
-      <path d={`M${x - 9 * s} ${b + (hem - 2) * s}Q${x} ${b + (hem) * s} ${x + 9 * s} ${b + (hem - 2) * s}`} stroke={trim} strokeWidth=".8" fill="none" />
-      <path d={`M${x - 2.4 * s} ${b - 0.5 * s}L${x} ${b + 7 * s}L${x + 2.4 * s} ${b - 0.5 * s}`} fill="none" stroke={trim} strokeWidth=".6" />
+      <path d={`M${x - 1 * s} ${b + 2 * s}Q${x - 3 * s} ${b + (hem / 2) * s} ${x - 5 * s} ${b + hem * s}M${x + 2 * s} ${b + 2 * s}Q${x + 4 * s} ${b + (hem / 2) * s} ${x + 6 * s} ${b + hem * s}M${x - 7 * s} ${b + (hem - 3) * s}Q${x - 7.5 * s} ${b + (hem / 2) * s} ${x - 5 * s} ${b + 14 * s}`} stroke="#000" strokeWidth=".4" opacity=".3" fill="none" />
+      <path d={`M${x - 10 * s} ${b + (hem - 2) * s}Q${x} ${b + hem * s} ${x + 10 * s} ${b + (hem - 2) * s}`} stroke={trim} strokeWidth=".9" fill="none" />
+      <path d={`M${x - 8 * s} ${b + (hem - 5) * s}Q${x} ${b + (hem - 3) * s} ${x + 8 * s} ${b + (hem - 5) * s}`} stroke={trim} strokeWidth=".35" strokeDasharray=".8 1" fill="none" opacity=".8" />
+      <path d={`M${x - 2.6 * s} ${b - 0.5 * s}L${x} ${b + 8 * s}L${x + 2.6 * s} ${b - 0.5 * s}`} fill="none" stroke={trim} strokeWidth=".6" />
+      <rect x={x - 4.2 * s} y={b + 9.4 * s} width={8.4 * s} height={1.4 * s} fill="url(#mmGoldV)" />
+      <circle cx={x} cy={b + 10.1 * s} r={1 * s} fill="#ff4a8a" stroke={GOLD_LIGHT} strokeWidth=".25" />
+      <path d={`M${x + 4.6 * s} ${b}Q${x + 6 * s} ${b + 10 * s} ${x + 5 * s} ${b + 13 * s}L${x + 10.5 * s} ${b + hem * s}`} fill="none" stroke="#fff6d8" strokeWidth=".6" opacity=".45" />
       {arms === "up" && <>{arm(11, -10, -1)}{arm(11, -10, 1)}</>}
       {arms === "out" && <>{arm(12, 6, -1)}{arm(12, 6, 1)}</>}
       {arms === "down" && <>{arm(7, 14, -1)}{arm(7, 14, 1)}</>}
-      <path d={`M${x - 3.6 * s} ${y}Q${x - 6.4 * s} ${y + 6 * s} ${x - 5 * s} ${y + 11 * s}L${x - 3 * s} ${y + 10 * s}Q${x - 3.6 * s} ${y + 5 * s} ${x - 2.6 * s} ${y + 2 * s}ZM${x + 3.6 * s} ${y}Q${x + 6.4 * s} ${y + 6 * s} ${x + 5 * s} ${y + 11 * s}L${x + 3 * s} ${y + 10 * s}Q${x + 3.6 * s} ${y + 5 * s} ${x + 2.6 * s} ${y + 2 * s}Z`} fill={hair} />
-      <circle cx={x} cy={y} r={4 * s} fill={skin} />
-      <ellipse cx={x + 1.2 * s} cy={y + 0.6 * s} rx={2.4 * s} ry={3.2 * s} fill="url(#mmShadeV)" opacity=".35" />
-      <path d={`M${x - 4.2 * s} ${y + 0.4 * s}a${4.2 * s} ${4.2 * s} 0 0 1 ${8.4 * s} 0Q${x} ${y - 2.4 * s} ${x - 4.2 * s} ${y + 0.4 * s}Z`} fill={hair} />
-      <circle cx={x - 1.5 * s} cy={y + 0.3 * s} r={0.45 * s} fill="#2a1030" />
-      <circle cx={x + 1.5 * s} cy={y + 0.3 * s} r={0.45 * s} fill="#2a1030" />
-      <path d={`M${x - 1 * s} ${y + 2 * s}Q${x} ${y + 2.6 * s} ${x + 1 * s} ${y + 2 * s}`} stroke="#b0405a" strokeWidth={0.45 * s} fill="none" />
-      {hat === "crown" && <path d={`M${x - 4 * s} ${y - 3 * s}L${x - 4 * s} ${y - 7 * s}L${x - 2 * s} ${y - 4.5 * s}L${x} ${y - 8 * s}L${x + 2 * s} ${y - 4.5 * s}L${x + 4 * s} ${y - 7 * s}L${x + 4 * s} ${y - 3 * s}Z`} fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".3" />}
-      {hat === "cap" && <path d={`M${x - 4.4 * s} ${y - 1 * s}Q${x} ${y - 8 * s} ${x + 4.4 * s} ${y - 1 * s}Z`} fill={trim} />}
+      <rect x={x - 1.3 * s} y={y + 2 * s} width={2.6 * s} height={3 * s} fill={skin} />
+      <ellipse cx={x} cy={y} rx={3.7 * s} ry={4.3 * s} fill={skin} />
+      <ellipse cx={x + 1.4 * s} cy={y + 0.6 * s} rx={2.3 * s} ry={3.6 * s} fill="url(#mmShadeV)" opacity=".35" />
+      <path d={`M${x - 4 * s} ${y + 0.6 * s}Q${x - 3.8 * s} ${y - 4.8 * s} ${x} ${y - 4.8 * s}Q${x + 3.8 * s} ${y - 4.8 * s} ${x + 4 * s} ${y + 0.6 * s}Q${x + 1.5 * s} ${y - 2.4 * s} ${x - 1 * s} ${y - 1.6 * s}Q${x - 2.6 * s} ${y - 1 * s} ${x - 4 * s} ${y + 0.6 * s}Z`} fill={hair} />
+      <path d={`M${x - 2.4 * s} ${y + 0.1 * s}q${1 * s} ${-0.7 * s} ${2 * s} 0M${x + 0.4 * s} ${y + 0.1 * s}q${1 * s} ${-0.7 * s} ${2 * s} 0`} stroke="#2a1030" strokeWidth={0.4 * s} fill="none" />
+      <circle cx={x - 1.4 * s} cy={y + 0.6 * s} r={0.42 * s} fill="#2a1030" />
+      <circle cx={x + 1.4 * s} cy={y + 0.6 * s} r={0.42 * s} fill="#2a1030" />
+      <path d={`M${x - 0.9 * s} ${y + 2.5 * s}Q${x} ${y + 3.1 * s} ${x + 0.9 * s} ${y + 2.5 * s}`} stroke="#c0405a" strokeWidth={0.55 * s} fill="none" />
+      <circle cx={x - 2 * s} cy={y + 1.8 * s} r={0.9 * s} fill="#ff7a9a" opacity=".3" />
+      <circle cx={x + 2 * s} cy={y + 1.8 * s} r={0.9 * s} fill="#ff7a9a" opacity=".3" />
+      <path d={`M${x - 2.4 * s} ${y + 4.6 * s}Q${x} ${y + 7 * s} ${x + 2.4 * s} ${y + 4.6 * s}`} stroke={GOLD} strokeWidth=".4" fill="none" />
+      <circle cx={x} cy={y + 6.2 * s} r={0.7 * s} fill="#6af0ff" />
+      {hat === "crown" && <path d={`M${x - 4.4 * s} ${y - 3 * s}L${x - 4.4 * s} ${y - 7.6 * s}L${x - 2.2 * s} ${y - 5 * s}L${x} ${y - 8.8 * s}L${x + 2.2 * s} ${y - 5 * s}L${x + 4.4 * s} ${y - 7.6 * s}L${x + 4.4 * s} ${y - 3 * s}Z`} fill="url(#mmGoldV)" stroke={GOLD_DARK} strokeWidth=".3" />}
+      {hat === "cap" && <><path d={`M${x - 4.6 * s} ${y - 1 * s}Q${x} ${y - 8.4 * s} ${x + 4.6 * s} ${y - 1 * s}Z`} fill={trim} /><path d={`M${x + 1 * s} ${y - 6 * s}Q${x + 7 * s} ${y - 10 * s} ${x + 9 * s} ${y - 5 * s}`} stroke="#fff" strokeWidth=".6" fill="none" /></>}
     </g>
   );
 };
@@ -761,9 +784,9 @@ const courtScene = (suit: Suit, rank: number): React.ReactNode => {
     <><Ground y={92} c="#244a24" c2="#3a6a2a" />{[16, 84].map((x) => <circle key={x} cx={x} cy={80} r="4" fill="#8a3a7a" />)}</>;
   const E = (p: P) => <Emblem suit={suit} {...p} />;
   if (rank === 0)
-    return <>{back}<Ground y={98} c="#2a1a5a" c2="#3b2480" /><Fig x={50} y={44} s={1.1} robe={robe} arms="up" hem={34} hat="cap" /><g>{E({ x: 66, y: 28, s: 1.2 })}</g></>;
+    return <>{back}<Ground y={98} c="#2a1a5a" c2="#3b2480" /><Fig x={50} y={44} s={1.1} robe={robe} arms="up" hem={34} hat="cap" /><g>{E({ x: 62, y: 29, s: 0.9 })}</g></>;
   if (rank === 1)
-    return <>{back}<Ground y={98} /><Horse x={46} y={86} s={0.9} walk /><Fig x={46} y={50} s={0.95} robe={robe} trim={SILVER} arms="up" hem={16} hat="crown" /><g>{E({ x: 70, y: 40, s: 1.3, r: 12 })}</g></>;
+    return <>{back}<Ground y={98} /><Horse x={46} y={86} s={0.9} walk /><Fig x={46} y={50} s={0.95} robe={robe} trim={SILVER} arms="up" hem={16} hat="crown" /><g>{E({ x: 58, y: 36, s: 0.9, r: 12 })}</g></>;
   const tall = rank === 3;
   return (
     <>
@@ -772,7 +795,7 @@ const courtScene = (suit: Suit, rank: number): React.ReactNode => {
       <path d={`M24 ${tall ? 14 : 20}Q50 ${tall ? 2 : 8} 76 ${tall ? 14 : 20}`} fill="none" stroke={GOLD} strokeWidth="1.2" />
       <Fig x={50} y={tall ? 36 : 40} s={1.3} robe={robe} trim={GOLD} arms="down" hem={36} hat="crown" />
       {tall && <path d="M40 28l-2 -8l6 4l6 -8l6 8l6 -4l-2 8Z" fill={GOLD} stroke={GOLD_DARK} strokeWidth=".4" />}
-      <g>{E({ x: 72, y: 56, s: 1.5 })}</g>
+      <g>{E({ x: 61, y: 64, s: 1.0 })}</g>
       {rank === 3 && <line x1="30" y1="46" x2="30" y2="92" stroke={GOLD} strokeWidth="1.6" />}
       {rank === 2 && <path d="M36 104Q50 98 64 104" stroke={ROSE} fill="none" strokeWidth="1.2" />}
     </>
@@ -879,54 +902,60 @@ const Atmosphere = ({ id, kind }: { id: number; kind: string }) => {
   );
 };
 
+const Backdrop = ({ id, kind }: { id: number; kind: string }) => {
+  const r = (n: number) => ((id * 7919 + n * 104729) % 100003) / 100003;
+  const hz = 70 + r(1) * 10;
+  const haze = kind === "wands" ? "#ff9a5a" : kind === "cups" ? "#6ad0ff" : kind === "swords" ? "#a8b4ff" : kind === "pentacles" ? "#9aff9a" : "#ffb8ff";
+  const ridge = (o: number, amp: number, y0: number) => {
+    let d = `M8 ${y0}`;
+    for (let i = 0; i <= 6; i++) d += `L${8 + i * 14} ${y0 - amp * (0.3 + r(o + i) * 0.7)}`;
+    return d + `L92 ${y0}V112H8Z`;
+  };
+  return (
+    <g>
+      <ellipse cx={30 + r(2) * 40} cy={hz} rx="46" ry="24" fill={haze} opacity=".32" />
+      <circle cx={30 + r(3) * 40} cy={hz - 8} r="16" fill="url(#mmHalo)" />
+      <path d={ridge(10, 22, hz + 4)} fill="#6a48b8" opacity=".5" />
+      <path d={ridge(20, 14, hz + 10)} fill="#3a2478" opacity=".7" />
+      <ellipse cx="22" cy={hz + 9} rx="22" ry="3.4" fill="#ffffff" opacity=".22" />
+      <ellipse cx="76" cy={hz + 13} rx="26" ry="3.6" fill="#ffffff" opacity=".18" />
+      {Array.from({ length: 8 }).map((_, i) => {
+        const cx = 12 + r(40 + i) * 76, cy = 14 + r(50 + i) * 50, k = 1.4 + r(70 + i) * 1.6;
+        return <path key={i} d={`M${cx} ${cy - k * 2}L${cx + k * 0.4} ${cy - k * 0.4}L${cx + k * 2} ${cy}L${cx + k * 0.4} ${cy + k * 0.4}L${cx} ${cy + k * 2}L${cx - k * 0.4} ${cy + k * 0.4}L${cx - k * 2} ${cy}L${cx - k * 0.4} ${cy - k * 0.4}Z`} fill="#fff4c8" opacity={0.35 + r(60 + i) * 0.5} />;
+      })}
+    </g>
+  );
+};
+
+const ARCH = "M8 112V28Q8 16 20 14Q34 12 42 8Q50 3 58 8Q66 12 80 14Q92 16 92 28V112Z";
 const Ornament = () => (
   <g fill="none" stroke="url(#mmGoldFrame)">
-    <rect x="4" y="5" width="92" height="110" rx="6" strokeWidth="1.4" />
-    <rect x="6.6" y="7.6" width="86.8" height="104.8" rx="4" strokeWidth=".5" />
-    <rect x="8" y="10" width="84" height="102" rx="2.5" strokeWidth=".9" />
-    {[[8, 10, 1, 1], [92, 10, -1, 1], [8, 112, 1, -1], [92, 112, -1, -1]].map(([x, y, sx, sy], i) => (
-      <g key={i} transform={`translate(${x} ${y}) scale(${sx} ${sy})`}>
-        <path d="M0 0Q8 0 8 6Q4 6 4 3Q2 8 0 10M0 0Q0 8 6 8" strokeWidth=".6" />
-        <circle cx="2.4" cy="2.4" r="1.5" fill="url(#mmGoldFrame)" stroke="none" />
-      </g>
-    ))}
-    <path d="M42 10Q50 4 58 10" strokeWidth=".7" />
-    <path d="M46 112Q50 117 54 112" strokeWidth=".7" />
-    <path d="M50 4.2l2.2 3.6L50 11.4l-2.2 -3.6Z" fill="url(#mmGoldFrame)" stroke="none" />
+    <path d="M4 118V26Q4 12 18 10Q34 8 42 4Q50 -1 58 4Q66 8 82 10Q96 12 96 26V118Q96 124 90 124H10Q4 124 4 118Z" strokeWidth="1.6" />
+    <path d={ARCH} strokeWidth="1.1" />
+    <path d="M6.4 112V27Q6.4 14 19 12Q34 10 42 6Q50 1 58 6Q66 10 81 12Q93.6 14 93.6 27V112" strokeWidth=".4" />
+    <path d="M10 106Q9 98 15 96M90 106Q91 98 85 96M12 24Q14 18 22 17M88 24Q86 18 78 17" strokeWidth=".6" />
+    <circle cx="50" cy="6" r="4.4" fill="#1d0b45" strokeWidth=".9" />
+    <path d="M50 2.6l1 2.4l2.4 1l-2.4 1l-1 2.4l-1 -2.4l-2.4 -1l2.4 -1Z" fill="url(#mmGoldFrame)" stroke="none" />
+    <rect x="9" y="113" width="82" height="25" rx="7" fill="#12082e" stroke="url(#mmGoldFrame)" strokeWidth="1" />
+    <rect x="11" y="115" width="78" height="21" rx="5" strokeWidth=".35" />
+    <circle cx="50" cy="112.5" r="5.2" fill="#1d0b45" strokeWidth=".9" />
+    <path d="M50 108.4l1.2 2.9l2.9 1.2l-2.9 1.2l-1.2 2.9l-1.2 -2.9l-2.9 -1.2l2.9 -1.2Z" fill="url(#mmGoldFrame)" stroke="none" />
+    <path d="M12 113Q22 108 30 113M88 113Q78 108 70 113" strokeWidth=".6" />
+    <rect x="4" y="124" width="92" height="22" rx="0" fill="none" stroke="none" />
   </g>
 );
 
 export default function TarotCardArt({ id, className = "" }: { id: number; className?: string }) {
-  const scene = resolveScene(id);
-  const gid = `tca${id}`;
-  const kind = id < 22 ? "major" : SUITS[Math.floor((id - 22) / 14)] ?? "major";
+  const artworkUrl = artworkById.get(Number(id));
   return (
-    <svg viewBox="0 0 100 150" preserveAspectRatio="xMidYMin slice" className={className} aria-hidden="true" focusable="false">
-      <defs>
-        <Defs />
-        <linearGradient id={`${gid}s`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor={scene.sky[0]} />
-          <stop offset=".55" stopColor={scene.sky[0]} stopOpacity=".6" />
-          <stop offset="1" stopColor={scene.sky[1]} />
-        </linearGradient>
-        <linearGradient id={`${gid}f`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#1d0f45" />
-          <stop offset="1" stopColor="#05020f" />
-        </linearGradient>
-        <clipPath id={`${gid}c`}>
-          <rect x="8" y="10" width="84" height="102" rx="2.5" />
-        </clipPath>
-      </defs>
-      <rect width="100" height="150" fill={`url(#${gid}f)`} />
-      <g clipPath={`url(#${gid}c)`}>
-        <rect x="8" y="10" width="84" height="102" fill={`url(#${gid}s)`} />
-        <Atmosphere id={id} kind={kind} />
-        <Stars id={id} />
-        <g filter="url(#mmPaint)">{scene.draw}</g>
-        <rect x="8" y="10" width="84" height="102" fill="url(#mmVignette)" />
-        <rect x="8" y="10" width="84" height="102" filter="url(#mmGrain)" opacity=".16" style={{ mixBlendMode: "overlay" }} />
-      </g>
-      <Ornament />
-    </svg>
+    <div className={`relative overflow-hidden bg-[#05020f] ${className}`} aria-hidden="true">
+      <img src={artworkUrl} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
+      <svg viewBox="0 0 100 150" preserveAspectRatio="xMidYMin slice" className="pointer-events-none absolute inset-0 h-full w-full" focusable="false">
+        <defs>
+          <Defs />
+        </defs>
+        <Ornament />
+      </svg>
+    </div>
   );
 }

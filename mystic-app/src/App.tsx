@@ -85,6 +85,7 @@ import {
 } from "./data/spiritualData";
 import CelestialOnboarding from "./components/CelestialOnboarding";
 import LiveCommunity from "./components/LiveCommunity";
+import MemberProfile from "./components/MemberProfile";
 import MyProfile from "./components/MyProfile";
 import TarotCardArt from "./components/TarotCardArt";
 import type { UserIdentity } from "./types/userProfile";
@@ -207,6 +208,9 @@ export default function App() {
   const [memberList, setMemberList] = useState<any[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [selectedMemberProfile, setSelectedMemberProfile] = useState<any | null>(null);
+  const [isLunaProfilePreview, setIsLunaProfilePreview] = useState(false);
+  const [memberProfileError, setMemberProfileError] = useState("");
   // UI gate only (Firestore rules enforce hasTarotPermission). Derived from the user's Firestore document, not the
   // admin-portal session flag. tarotReader keeps the verified-email requirement because the rules require it too.
   const hasTarotReaderPermission = Boolean(
@@ -797,6 +801,28 @@ export default function App() {
     }
     setIsProfileSaving(false);
     return true;
+  };
+
+  const handleViewMemberProfile = async (uid: string) => {
+    setMemberProfileError("");
+    if (uid === currentUser?.uid) {
+      setSelectedMemberProfile(null);
+      setActiveTab("profile");
+      return;
+    }
+
+    try {
+      const profileSnapshot = await getDoc(doc(db, "users", uid));
+      if (!profileSnapshot.exists()) {
+        setMemberProfileError("That member profile is no longer available.");
+        return;
+      }
+      setIsLunaProfilePreview(false);
+      setSelectedMemberProfile({ uid: profileSnapshot.id, ...profileSnapshot.data() });
+    } catch (error) {
+      console.error("Failed to load member profile:", error);
+      setMemberProfileError("Unable to load that member profile. Please try again.");
+    }
   };
 
   const handleSignOut = async () => {
@@ -2544,7 +2570,21 @@ export default function App() {
               currentUserId={currentUser?.uid ?? null}
               avatarUrl={currentUser ? dbUserDoc?.avatarUrl || currentUser.photoURL || undefined : undefined}
               displayName={currentUser ? dbUserDoc?.displayName || currentUser.displayName || currentUser.email?.split("@")[0] || undefined : undefined}
+              onViewMemberProfile={handleViewMemberProfile}
             />
+          )}
+          {activeTab === "live" && selectedMemberProfile && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-md">
+                <MemberProfile member={selectedMemberProfile} onClose={() => setSelectedMemberProfile(null)} />
+              </div>
+            </div>
+          )}
+          {activeTab === "live" && memberProfileError && (
+            <div role="alert" className="fixed inset-x-4 top-6 z-[101] mx-auto max-w-md rounded-lg border border-red-400/30 bg-red-950/90 px-3 py-2 text-center text-xs text-red-200 shadow-xl">
+              {memberProfileError}
+              <button type="button" onClick={() => setMemberProfileError("")} className="ml-2 font-semibold underline">Close</button>
+            </div>
           )}
           {activeTab === "live" && false && (
             <div className="space-y-5 fade-in">
@@ -3206,6 +3246,7 @@ export default function App() {
                 avatarUrl: dbUserDoc?.avatarUrl || currentUser.photoURL || null
               } satisfies UserIdentity}
               email={currentUser.email || ""}
+              gemBalance={typeof dbUserDoc?.gemBalance === "number" ? dbUserDoc.gemBalance : 0}
               isSaving={isProfileSaving}
               saveError={profileSaveError}
               saveMessage={profileSaveMessage}
@@ -3216,6 +3257,16 @@ export default function App() {
           {/* ==================== 7. DEDICATED ADMIN CONSOLE VIEW ==================== */}
           {activeTab === "admin" && (
             <div className="space-y-6 fade-in text-left">
+              {(selectedMemberProfile || isLunaProfilePreview) && (
+                <MemberProfile
+                  member={selectedMemberProfile}
+                  previewLuna={isLunaProfilePreview}
+                  onClose={() => {
+                    setSelectedMemberProfile(null);
+                    setIsLunaProfilePreview(false);
+                  }}
+                />
+              )}
               {/* Header */}
               <div className="flex items-center justify-between border-b border-teal-500/30 pb-3">
                 <div className="flex items-center gap-2">
@@ -3229,6 +3280,19 @@ export default function App() {
                     </span>
                   </div>
                 </div>
+
+                {import.meta.env.DEV && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMemberProfile(null);
+                      setIsLunaProfilePreview(true);
+                    }}
+                    className="rounded border border-dashed border-teal-300/50 bg-teal-950/20 px-2.5 py-1.5 text-[10px] font-bold tracking-wider text-teal-200 transition hover:border-mystic-gold/60 hover:text-mystic-gold"
+                  >
+                    PREVIEW LUNA
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -4086,6 +4150,13 @@ export default function App() {
                                 </button>
                                 {open && (
                                   <div className="px-3 pb-3 pt-1 space-y-2 border-t border-[#2c1654]/40 text-[10px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedMemberProfile(m)}
+                                      className="w-full rounded border border-teal-400/40 bg-teal-950/20 py-1.5 text-teal-300 font-bold uppercase transition hover:bg-teal-950/40 active:scale-[0.99]"
+                                    >
+                                      View Profile
+                                    </button>
                                     <div className="grid grid-cols-2 gap-2 text-slate-300">
                                       <div><span className="text-slate-500 uppercase font-mono block">Role</span>{m.role || "member"}</div>
                                       <div><span className="text-slate-500 uppercase font-mono block">Tarot Reader</span>{m.tarotReader === true || isAdminMember ? "Yes" : "No"}</div>

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { collection, deleteDoc, doc, limitToLast, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { collection, deleteDoc, doc, getDoc, limitToLast, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
 import { signInAnonymously } from "firebase/auth";
 import { auth, db } from "../firebase";
 import {
@@ -40,6 +40,7 @@ type LiveTopic =
 
 type Broadcaster = {
   id: string;
+  profileUid?: string;
   name: string;
   avatar: string;
   title: string;
@@ -73,7 +74,7 @@ type LiveSessionDoc = LiveSessionMeta & { ownerUid: string; sessionId: string; s
 const BROADCAST_HEARTBEAT_MS = 30000;
 const BROADCAST_STALE_MS = 90000;
 
-type ChatLine = { id: number | string; sender: string; text: string; kind?: "gift" | "system" };
+type ChatLine = { id: number | string; sender: string; senderUid?: string; avatarUrl?: string; text: string; kind?: "gift" | "system" };
 
 const topics: { name: LiveTopic; icon: typeof Sparkles }[] = [
   { name: "Tarot & Spirituality", icon: Sparkles },
@@ -123,11 +124,12 @@ function formatCount(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId, displayName, avatarUrl, gemBalance }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null; displayName?: string; avatarUrl?: string; gemBalance: number }) {
+export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserId, displayName, avatarUrl, gemBalance, onViewMemberProfile }: { onExit: () => void; isAuthorizedReader: boolean; currentUserId: string | null; displayName?: string; avatarUrl?: string; gemBalance: number; onViewMemberProfile: (uid: string) => void }) {
   const [screen, setScreen] = useState<"directory" | "setup" | "broadcast" | "viewer" | "earnings">("viewer");
   const [selectedTopic, setSelectedTopic] = useState<LiveTopic | "All">("All");
   const [selectedBroadcaster, setSelectedBroadcaster] = useState<Broadcaster>(initialBroadcasters[0]);
   const [myBroadcaster, setMyBroadcaster] = useState<Broadcaster | null>(null);
+  const chatAvatarCache = useRef(new Map<string, string | null>());
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastDescription, setBroadcastDescription] = useState("");
   const [broadcastHashtags, setBroadcastHashtags] = useState("#Tarot #Spirituality #Guidance");
@@ -195,6 +197,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
 
   const toBroadcaster = (remote: LiveSessionDoc): Broadcaster => ({
     id: `live-${remote.ownerUid}`,
+    profileUid: remote.ownerUid,
     name: remote.name || "Live broadcaster",
     avatar: remote.avatar || "LV",
     avatarUrl: remote.avatarUrl || undefined,
@@ -301,7 +304,22 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         seen.add(change.doc.id);
         const data = change.doc.data();
         if (typeof data.sender !== "string" || typeof data.text !== "string") return;
-        lines.push({ id: `event-${change.doc.id}`, sender: data.sender, text: data.text, kind: data.kind === "heart" || data.kind === "gift" || data.kind === "tip" ? "gift" : undefined });
+        const senderUid = typeof data.uid === "string" ? data.uid : undefined;
+        const eventAvatarUrl = typeof data.avatarUrl === "string" && data.avatarUrl ? data.avatarUrl : undefined;
+        if (senderUid && eventAvatarUrl) chatAvatarCache.current.set(senderUid, eventAvatarUrl);
+        lines.push({ id: `event-${change.doc.id}`, sender: data.sender, senderUid, avatarUrl: eventAvatarUrl ?? (senderUid ? chatAvatarCache.current.get(senderUid) ?? undefined : undefined), text: data.text, kind: data.kind === "heart" || data.kind === "gift" || data.kind === "tip" ? "gift" : undefined });
+        if (senderUid && !eventAvatarUrl && !chatAvatarCache.current.has(senderUid)) {
+          chatAvatarCache.current.set(senderUid, null);
+          getDoc(doc(db, "users", senderUid))
+            .then((profileSnapshot) => {
+              const profileAvatarUrl = typeof profileSnapshot.data()?.avatarUrl === "string" ? profileSnapshot.data()!.avatarUrl : null;
+              chatAvatarCache.current.set(senderUid, profileAvatarUrl);
+              if (profileAvatarUrl) {
+                setChat((messages) => messages.map((message) => message.senderUid === senderUid && !message.avatarUrl ? { ...message, avatarUrl: profileAvatarUrl } : message));
+              }
+            })
+            .catch((error) => console.error("Could not load chat sender profile:", error));
+        }
         // The broadcaster's gift total only counts new gifts from other people, never history or their own echo
         if (screen === "broadcast" && data.kind === "gift" && data.uid !== viewerUid && typeof data.amount === "number" && data.createdAt >= listenStartedAt) {
           setGiftsReceived((total) => total + data.amount);
@@ -321,6 +339,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     setDoc(doc(eventsRef(activeEventsSessionId), eventId), {
       uid: viewerUid,
       sender: (displayName?.trim() || "Guest").slice(0, 80),
+      ...(avatarUrl ? { avatarUrl } : {}),
       text: text.slice(0, 300),
       kind,
       ...(amount === undefined ? {} : { amount }),
@@ -603,7 +622,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         videoStatus={isBroadcaster ? broadcastVideo.status : viewerVideo.status}
         videoError={isBroadcaster ? broadcastVideo.error : ""}
         hasRealVideo={isBroadcaster ? Boolean(currentUserId) : Boolean(viewerBroadcasterUid)}
-        broadcaster={isBroadcaster && myBroadcaster ? { ...myBroadcaster, avatarUrl } : activeSession ? toBroadcaster(activeSession) : preLiveBroadcaster}
+        broadcaster={isBroadcaster && myBroadcaster ? { ...myBroadcaster, profileUid: currentUserId ?? undefined, avatarUrl } : activeSession ? toBroadcaster(activeSession) : { ...preLiveBroadcaster, profileUid: currentUserId ?? undefined }}
         isBroadcaster={isBroadcaster}
         onBack={() => {
           if (isBroadcaster) {
@@ -612,6 +631,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
           } else if (viewerReturn === "directory") setScreen("directory");
           else onExit();
         }}
+        onViewMemberProfile={onViewMemberProfile}
         isPaused={isBroadcaster ? isBroadcastPaused : Boolean(activeRemote?.isPaused)}
         canUseTarot={canUseTarot}
         currentRank={currentRank.name}

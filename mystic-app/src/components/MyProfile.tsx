@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Camera, Check, ImagePlus, LoaderCircle, UserRound } from "lucide-react";
+import { Camera, Check, Gem, ImagePlus, LoaderCircle, UserRound } from "lucide-react";
 import type { UserIdentity } from "../types/userProfile";
 
 type Props = {
   identity: UserIdentity;
   email: string;
+  gemBalance: number;
   isSaving: boolean;
   saveError: string;
   saveMessage: string;
@@ -16,6 +17,7 @@ const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
 export default function MyProfile({
   identity,
   email,
+  gemBalance,
   isSaving,
   saveError,
   saveMessage,
@@ -131,6 +133,17 @@ export default function MyProfile({
           <span className="block break-all text-xs text-slate-300">{email}</span>
         </div>
 
+        <div className="flex items-center justify-between rounded-xl border border-teal-400/30 bg-teal-950/20 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Gem className="h-5 w-5 text-mystic-gold" aria-hidden="true" />
+            <div>
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-teal-300">Gem Balance</span>
+              <span className="text-[10px] text-slate-400">Private to your account</span>
+            </div>
+          </div>
+          <strong className="font-display text-xl tabular-nums text-mystic-gold">{gemBalance.toLocaleString()}</strong>
+        </div>
+
         {(photoError || saveError) && (
           <p role="alert" className="rounded-lg border border-red-400/30 bg-red-950/30 px-3 py-2 text-xs text-red-300">
             {photoError || saveError}
@@ -145,7 +158,7 @@ export default function MyProfile({
         <button
           type="submit"
           disabled={isSaving}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-mystic-gold px-4 py-3 text-xs font-bold uppercase tracking-wider text-[#0b081c] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-60"
+          className="mx-auto flex min-h-11 items-center justify-center gap-2 rounded-lg bg-mystic-gold px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-[#0b081c] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-60"
         >
           {isSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
           {isSaving ? "Saving Profile..." : "Save Profile"}
