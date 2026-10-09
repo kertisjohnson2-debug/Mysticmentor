@@ -357,9 +357,6 @@ export default function ImmersiveLiveRoom({
                       <div className="absolute inset-0 h-full w-full overflow-hidden rounded-lg bg-cover bg-center shadow-[0_8px_28px_rgba(0,0,0,.55)] backface-hidden" style={{ backgroundImage: `url(${cardBackImage})` }} />
                       <div className={`absolute inset-0 h-full w-full overflow-hidden rounded-lg backface-hidden rotate-y-180 ${item.isReversed ? "rotate-180" : ""}`}>
                         <TarotCardArt id={item.card.id} className="absolute inset-0 h-full w-full rounded-lg pointer-events-none" />
-                        <h3 className="absolute inset-x-2 bottom-2 z-10 truncate text-center font-display text-[9px] font-bold leading-tight tracking-tight text-white drop-shadow">
-                          {item.card.name}
-                        </h3>
                       </div>
                     </button>
                   </div>

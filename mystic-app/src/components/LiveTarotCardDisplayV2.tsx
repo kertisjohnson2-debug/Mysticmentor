@@ -59,14 +59,8 @@ export default function LiveTarotCardDisplayV2({ onDone }: Props) {
                   className="relative aspect-[2/3] w-[5.25rem] overflow-hidden rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-mystic-gold md:w-[8rem]"
                 >
                   {item.isRevealed ? (
-                    <div className={`backface-hidden absolute inset-0 flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border-2 border-mystic-gold bg-gradient-to-b from-[#180f33] to-[#070412] p-2 text-center shadow-lg ${item.isReversed ? "rotate-180" : ""}`}>
+                    <div className={`backface-hidden absolute inset-0 h-full w-full overflow-hidden rounded-lg ${item.isReversed ? "rotate-180" : ""}`}>
                       <TarotCardArt key={`live-tarot-art-${item.id}`} id={item.id} className="pointer-events-none absolute inset-0 h-full w-full rounded-lg" />
-                      <div className="absolute inset-1 border border-mystic-gold/10 rounded-md" />
-                      <span className="z-10 text-[8px] font-mono uppercase tracking-tight text-mystic-gold/80 drop-shadow">Arcana {card.number}</span>
-                      <div className="z-10 mt-auto flex flex-col items-center">
-                        <h4 className="line-clamp-1 font-display text-[9px] font-bold leading-tight tracking-tight text-white">{card.name}</h4>
-                        <p className="mt-0.5 text-[7px] font-semibold uppercase tracking-tighter text-teal-400">{item.isReversed ? "Reversed" : "Upright"}</p>
-                      </div>
                     </div>
                   ) : (
                     <span className="absolute inset-0 rounded-lg border-2 border-mystic-gold/55 bg-cover bg-center shadow-[0_8px_28px_rgba(0,0,0,.55)]" style={{ backgroundImage: `url(${cardBackImage})` }} />
