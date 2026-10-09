@@ -12,7 +12,7 @@ import fs from "fs/promises";
 import admin from "firebase-admin";
 import { getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldPath, FieldValue, getFirestore } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import crypto from "crypto";
 
@@ -56,6 +56,12 @@ const GEM_PACKAGES: Record<string, { gems: number; cost: number }> = {
   gems_500: { gems: 500, cost: 4.99 },
   gems_1200: { gems: 1200, cost: 9.99 },
 };
+
+const connectionRequestId = (senderUid: string, recipientUid: string) =>
+  crypto.createHash("sha256").update(`${senderUid}\0${recipientUid}`).digest("hex");
+
+const connectionId = (firstUid: string, secondUid: string) =>
+  crypto.createHash("sha256").update([firstUid, secondUid].sort().join("\0")).digest("hex");
 
 function isLocalHost(host: string | undefined): boolean {
   if (!host) return false;
@@ -304,6 +310,196 @@ async function startServer() {
     } catch (error) {
       console.error("[Notifications] Live notification failed:", error);
       return res.status(500).json({ error: "Could not create notifications" });
+    }
+  });
+
+  const isValidMemberUid = (value: unknown): value is string =>
+    typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
+
+  const getSafeMember = async (uid: string) => {
+    const snapshot = await db.collection("users").doc(uid).get();
+    const data = snapshot.data();
+    if (!snapshot.exists || data?.suspended === true) return null;
+    return {
+      uid,
+      displayName: String(data?.displayName || "Celestial Member").slice(0, 100),
+      avatarUrl: safeAvatar(data?.avatarUrl)
+    };
+  };
+
+  app.get("/api/connections/members", async (req, res) => {
+    try {
+      const uid = await authenticateMember(req, res);
+      if (!uid) return;
+      const cursor = req.query.cursor;
+      const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100).toLocaleLowerCase() : "";
+      if ((cursor !== undefined && !isValidMemberUid(cursor)) || (req.query.search !== undefined && typeof req.query.search !== "string")) {
+        return res.status(400).json({ error: "Invalid member search parameters" });
+      }
+
+      let membersQuery = db.collection("users").orderBy(FieldPath.documentId()).limit(200);
+      if (typeof cursor === "string") membersQuery = membersQuery.startAfter(cursor).limit(200);
+      const snapshot = await membersQuery.get();
+      const members: { uid: string; displayName: string; avatarUrl: string }[] = [];
+      let lastScannedIndex = -1;
+
+      for (let index = 0; index < snapshot.docs.length; index += 1) {
+        const item = snapshot.docs[index];
+        lastScannedIndex = index;
+        const data = item.data();
+        const displayName = String(data.displayName || "Celestial Member").slice(0, 100);
+        if (item.id === uid || data.suspended === true || (search && !displayName.toLocaleLowerCase().includes(search))) continue;
+        members.push({ uid: item.id, displayName, avatarUrl: safeAvatar(data.avatarUrl) });
+        if (members.length === 50) break;
+      }
+      const hasMore = lastScannedIndex < snapshot.docs.length - 1 || snapshot.size === 200;
+
+      return res.json({
+        members,
+        nextCursor: hasMore && lastScannedIndex >= 0 ? snapshot.docs[lastScannedIndex].id : null
+      });
+    } catch (error) {
+      console.error("[Connections] Member discovery failed:", error);
+      if (!res.headersSent) return res.status(500).json({ error: "Could not load members" });
+    }
+  });
+
+  app.get("/api/connections", async (req, res) => {
+    const uid = await authenticateMember(req, res);
+    if (!uid) return;
+    try {
+      const [incomingSnapshot, outgoingSnapshot, connectionsSnapshot] = await Promise.all([
+        db.collection("connectionRequests").where("recipientUid", "==", uid).get(),
+        db.collection("connectionRequests").where("senderUid", "==", uid).get(),
+        db.collection("connections").where("memberUids", "array-contains", uid).get()
+      ]);
+      const pendingIncoming = incomingSnapshot.docs.filter((item) => item.data().status === "pending");
+      const pendingOutgoing = outgoingSnapshot.docs.filter((item) => item.data().status === "pending");
+      const otherUids = [...new Set([
+        ...pendingIncoming.map((item) => String(item.data().senderUid)),
+        ...pendingOutgoing.map((item) => String(item.data().recipientUid)),
+        ...connectionsSnapshot.docs.map((item) => {
+          const members = item.data().memberUids as string[];
+          return members.find((memberUid) => memberUid !== uid) ?? "";
+        })
+      ].filter(Boolean))];
+      const profiles = await Promise.all(otherUids.map(async (otherUid) => [otherUid, await getSafeMember(otherUid)] as const));
+      const profileByUid = new Map(profiles);
+      const requestItems = (items: typeof pendingIncoming, memberField: "senderUid" | "recipientUid") =>
+        items.flatMap((item) => {
+          const member = profileByUid.get(String(item.data()[memberField]));
+          return member ? [{ id: item.id, member, createdAt: item.data().createdAt ?? null }] : [];
+        });
+      const accepted = connectionsSnapshot.docs.flatMap((item) => {
+        const members = item.data().memberUids as string[];
+        const otherUid = members.find((memberUid) => memberUid !== uid);
+        const member = otherUid ? profileByUid.get(otherUid) : null;
+        return member ? [{ id: item.id, member, createdAt: item.data().createdAt ?? null }] : [];
+      });
+      return res.json({
+        incoming: requestItems(pendingIncoming, "senderUid"),
+        outgoing: requestItems(pendingOutgoing, "recipientUid"),
+        connections: accepted
+      });
+    } catch (error) {
+      console.error("[Connections] Relationship list failed:", error);
+      return res.status(500).json({ error: "Could not load connections" });
+    }
+  });
+
+  app.post("/api/connections/request", async (req, res) => {
+    const senderUid = await authenticateMember(req, res);
+    if (!senderUid) return;
+    const recipientUid = req.body?.recipientUid;
+    if (!isValidMemberUid(recipientUid) || recipientUid === senderUid) {
+      return res.status(400).json({ error: "Invalid connection recipient" });
+    }
+    try {
+      const [sender, recipient] = await Promise.all([getSafeMember(senderUid), getSafeMember(recipientUid)]);
+      if (!sender) return res.status(403).json({ error: "Your member profile is unavailable" });
+      if (!recipient) return res.status(404).json({ error: "Member not found" });
+
+      const requestRef = db.collection("connectionRequests").doc(connectionRequestId(senderUid, recipientUid));
+      const reverseRef = db.collection("connectionRequests").doc(connectionRequestId(recipientUid, senderUid));
+      const connectionRef = db.collection("connections").doc(connectionId(senderUid, recipientUid));
+      await db.runTransaction(async (transaction) => {
+        const [requestSnapshot, reverseSnapshot, connectionSnapshot] = await Promise.all([
+          transaction.get(requestRef),
+          transaction.get(reverseRef),
+          transaction.get(connectionRef)
+        ]);
+        if (connectionSnapshot.exists) throw Object.assign(new Error("You are already connected"), { status: 409 });
+        if (reverseSnapshot.exists && reverseSnapshot.data()?.status === "pending") {
+          throw Object.assign(new Error("This member has already requested to connect with you"), { status: 409 });
+        }
+        if (requestSnapshot.exists && requestSnapshot.data()?.status === "pending") {
+          throw Object.assign(new Error("Connection request already sent"), { status: 409 });
+        }
+        if (requestSnapshot.exists && requestSnapshot.data()?.status === "accepted") {
+          throw Object.assign(new Error("You are already connected"), { status: 409 });
+        }
+        transaction.set(requestRef, {
+          senderUid,
+          recipientUid,
+          status: "pending",
+          createdAt: new Date().toISOString()
+        });
+      });
+      return res.json({ sent: true });
+    } catch (error) {
+      const status = typeof error === "object" && error !== null && "status" in error
+        ? Number((error as { status: number }).status)
+        : 500;
+      if (status === 500) console.error("[Connections] Request creation failed:", error);
+      return res.status(status).json({ error: error instanceof Error ? error.message : "Could not send connection request" });
+    }
+  });
+
+  app.post("/api/connections/respond", async (req, res) => {
+    const uid = await authenticateMember(req, res);
+    if (!uid) return;
+    const { requestId, action } = req.body ?? {};
+    if (typeof requestId !== "string" || !/^[a-f0-9]{64}$/.test(requestId) || !["accept", "decline", "cancel"].includes(action)) {
+      return res.status(400).json({ error: "Invalid connection action" });
+    }
+    try {
+      const requestRef = db.collection("connectionRequests").doc(requestId);
+      await db.runTransaction(async (transaction) => {
+        const requestSnapshot = await transaction.get(requestRef);
+        if (!requestSnapshot.exists || requestSnapshot.data()?.status !== "pending") {
+          throw Object.assign(new Error("Connection request is no longer pending"), { status: 409 });
+        }
+        const request = requestSnapshot.data()!;
+        const isRecipientAction = (action === "accept" || action === "decline") && request.recipientUid === uid;
+        const isSenderCancel = action === "cancel" && request.senderUid === uid;
+        if (!isRecipientAction && !isSenderCancel) {
+          throw Object.assign(new Error("You are not allowed to change this request"), { status: 403 });
+        }
+
+        if (action === "accept") {
+          const connectionRef = db.collection("connections").doc(connectionId(request.senderUid, request.recipientUid));
+          const existingConnection = await transaction.get(connectionRef);
+          if (existingConnection.exists) {
+            throw Object.assign(new Error("You are already connected"), { status: 409 });
+          }
+          transaction.create(connectionRef, {
+            memberUids: [request.senderUid, request.recipientUid].sort(),
+            createdAt: FieldValue.serverTimestamp(),
+            acceptedRequestId: requestId
+          });
+        }
+        transaction.update(requestRef, {
+          status: action === "accept" ? "accepted" : action === "decline" ? "declined" : "cancelled",
+          respondedAt: FieldValue.serverTimestamp()
+        });
+      });
+      return res.json({ updated: true });
+    } catch (error) {
+      const status = typeof error === "object" && error !== null && "status" in error
+        ? Number((error as { status: number }).status)
+        : 500;
+      if (status === 500) console.error("[Connections] Request response failed:", error);
+      return res.status(status).json({ error: error instanceof Error ? error.message : "Could not update connection request" });
     }
   });
 

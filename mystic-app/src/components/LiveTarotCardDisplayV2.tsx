@@ -17,9 +17,9 @@ const initialCards: TestCard[] = [
   { id: 2, position: "Future", isReversed: false, isRevealed: false },
 ];
 
-type Props = { onDone: () => void };
+type Props = { onDone: () => void; isBroadcaster: boolean };
 
-export default function LiveTarotCardDisplayV2({ onDone }: Props) {
+export default function LiveTarotCardDisplayV2({ onDone, isBroadcaster }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [isReading, setIsReading] = useState(false);
   const [showReading, setShowReading] = useState(false);
@@ -40,7 +40,7 @@ export default function LiveTarotCardDisplayV2({ onDone }: Props) {
   }));
 
   return (
-    <section aria-label="Live Tarot reading" className="rounded-xl border border-mystic-gold/30 bg-[#100b1a]/85 p-3 shadow-2xl backdrop-blur-md">
+    <section aria-label="Live Tarot reading" className={`flex max-h-full min-h-0 flex-col overflow-hidden rounded-xl border border-mystic-gold/30 bg-[#100b1a]/85 p-3 shadow-xl backdrop-blur-md ${showReading && isBroadcaster ? "flex-1" : ""}`}>
       {!isReading ? (
         <div className="flex flex-col items-center gap-3 py-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-mystic-gold">Three-card reading</p>
@@ -48,7 +48,7 @@ export default function LiveTarotCardDisplayV2({ onDone }: Props) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-3 items-start gap-2 md:gap-4">
+          <div className="grid shrink-0 grid-cols-3 items-start gap-2 md:gap-4">
             {visibleCards.map(({ item, card }) => (
               <div key={item.id} className="flex min-w-0 flex-col items-center gap-1.5">
                 <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-mystic-gold drop-shadow">{item.position}</span>
@@ -69,14 +69,14 @@ export default function LiveTarotCardDisplayV2({ onDone }: Props) {
               </div>
             ))}
           </div>
-          <div className="mt-3 flex justify-center gap-2">
-            {cards.every((card) => card.isRevealed) && (
+          <div className="mt-3 flex shrink-0 justify-center gap-2">
+            {isBroadcaster && cards.every((card) => card.isRevealed) && (
               <button type="button" onClick={() => setShowReading((visible) => !visible)} className="rounded-full border border-mystic-gold/50 bg-mystic-gold/15 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-mystic-gold">{showReading ? "Hide Reading" : "Read"}</button>
             )}
             <button type="button" onClick={onDone} className="rounded-full border border-white/25 bg-black/40 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-white">Done</button>
           </div>
-          {showReading && (
-            <div className="mt-3 max-h-[32dvh] space-y-2 overflow-y-auto border-t border-white/10 pt-3">
+          {showReading && isBroadcaster && (
+            <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain touch-pan-y border-t border-white/10 pt-3">
               {visibleCards.map(({ item, card }) => (
                 <article key={`${item.id}-meaning`} className="rounded-lg border border-white/10 bg-black/20 p-2">
                   <h4 className="text-[10px] font-semibold text-mystic-gold">{item.position} · {card.name}</h4>
