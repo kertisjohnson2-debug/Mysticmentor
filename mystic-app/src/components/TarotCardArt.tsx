@@ -936,11 +936,6 @@ const Ornament = () => (
     <path d="M10 106Q9 98 15 96M90 106Q91 98 85 96M12 24Q14 18 22 17M88 24Q86 18 78 17" strokeWidth=".6" />
     <circle cx="50" cy="6" r="4.4" fill="#1d0b45" strokeWidth=".9" />
     <path d="M50 2.6l1 2.4l2.4 1l-2.4 1l-1 2.4l-1 -2.4l-2.4 -1l2.4 -1Z" fill="url(#mmGoldFrame)" stroke="none" />
-    <rect x="9" y="113" width="82" height="25" rx="7" fill="#12082e" stroke="url(#mmGoldFrame)" strokeWidth="1" />
-    <rect x="11" y="115" width="78" height="21" rx="5" strokeWidth=".35" />
-    <circle cx="50" cy="112.5" r="5.2" fill="#1d0b45" strokeWidth=".9" />
-    <path d="M50 108.4l1.2 2.9l2.9 1.2l-2.9 1.2l-1.2 2.9l-1.2 -2.9l-2.9 -1.2l2.9 -1.2Z" fill="url(#mmGoldFrame)" stroke="none" />
-    <path d="M12 113Q22 108 30 113M88 113Q78 108 70 113" strokeWidth=".6" />
     <rect x="4" y="124" width="92" height="22" rx="0" fill="none" stroke="none" />
   </g>
 );
