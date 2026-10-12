@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { CalendarDays, ShieldCheck, Sparkles, UserRound, X } from "lucide-react";
+import { CalendarDays, Radio, ShieldCheck, Sparkles, UserRound, X } from "lucide-react";
 
 export type MemberProfileData = {
   uid: string;
@@ -9,27 +8,20 @@ export type MemberProfileData = {
   tarotReader?: boolean;
   cloutPoints?: number;
   createdAt?: string | null;
+  bio?: string | null;
+  spiritualInterests?: string | null;
+  broadcasterRank?: string | null;
+  isLive?: boolean;
 };
 
 type Props = {
   member?: MemberProfileData;
-  previewLuna?: boolean;
   onClose?: () => void;
 };
 
-const DEVELOPMENT_PREVIEW_MEMBER: MemberProfileData = {
-  uid: "development-preview-only",
-  displayName: "Luna",
-  role: "Member",
-  tarotReader: false,
-  cloutPoints: 125,
-  createdAt: "2025-01-01T00:00:00.000Z"
-};
-
-export default function MemberProfile({ member, previewLuna = false, onClose }: Props) {
-  const [showDevelopmentPreview] = useState(() => import.meta.env.DEV && previewLuna);
-  const displayedMember = import.meta.env.DEV && showDevelopmentPreview ? DEVELOPMENT_PREVIEW_MEMBER : member;
-  if (!displayedMember) return null;
+export default function MemberProfile({ member, onClose }: Props) {
+  if (!member) return null;
+  const displayedMember = member;
   const displayName = displayedMember.displayName?.trim() || "Unnamed member";
   const role = displayedMember.role?.trim() || "member";
   const isAdmin = role.toLowerCase() === "admin";
@@ -90,13 +82,15 @@ export default function MemberProfile({ member, previewLuna = false, onClose }: 
                 Tarot Reader
               </span>
             )}
-            {displayedMember.tarotReader !== true && (
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-slate-400">
-                Tarot Reader: No
-              </span>
-            )}
+            {displayedMember.isLive === true && <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300/40 bg-rose-950/30 px-3 py-1.5 text-rose-200"><Radio className="h-3 w-3" aria-hidden="true" />Live now</span>}
+            {displayedMember.broadcasterRank && <span className="rounded-full border border-mystic-gold/35 bg-mystic-gold/10 px-3 py-1.5 text-mystic-gold">{displayedMember.broadcasterRank}</span>}
           </div>
         </div>
+
+        {(displayedMember.bio || displayedMember.spiritualInterests) && <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-left">
+          {displayedMember.bio && <div><p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">About</p><p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{displayedMember.bio}</p></div>}
+          {displayedMember.spiritualInterests && <div><p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Spiritual interests</p><div className="mt-2 flex flex-wrap gap-1.5">{displayedMember.spiritualInterests.split(",").map((interest) => interest.trim()).filter(Boolean).map((interest) => <span key={interest} className="rounded-full border border-teal-300/25 bg-teal-950/25 px-2 py-1 text-[10px] text-teal-200">{interest}</span>)}</div></div>}
+        </div>}
 
         <div className="mt-7 grid gap-3 sm:grid-cols-2">
           <div className="rounded-2xl border border-mystic-gold/25 bg-gradient-to-br from-mystic-gold/[0.09] to-black/20 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">

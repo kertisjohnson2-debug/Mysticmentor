@@ -71,7 +71,8 @@ import {
   Gem,
   Plus,
   Play,
-  Grid
+  Grid,
+  UsersRound
 } from "lucide-react";
 
 import {
@@ -87,6 +88,12 @@ import CelestialOnboarding from "./components/CelestialOnboarding";
 import LiveCommunity from "./components/LiveCommunity";
 import MemberProfile from "./components/MemberProfile";
 import MyProfile from "./components/MyProfile";
+import CommunityBoard from "./components/CommunityBoard";
+import CelestialToolsMenu, { CELESTIAL_TOOLS, type CelestialToolId } from "./components/CelestialToolsMenu";
+import Scheduling from "./components/Scheduling";
+import Connections from "./components/Connections";
+import ToolComingSoon from "./components/ToolComingSoon";
+import { loadPublicMemberProfile } from "./lib/memberProfile";
 import TarotCardArt from "./components/TarotCardArt";
 import type { UserIdentity } from "./types/userProfile";
 
@@ -112,7 +119,8 @@ export default function App() {
   const isSandboxConnectPath = window.location.pathname === "/stripe-sandbox-connect-onboard";
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "dashboard" | "profile" | "admin">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "community" | "scheduling" | "connections" | "groupChats" | "teams" | "dashboard" | "profile" | "admin">("home");
+  const [isToolsMenuOpen, setIsToolsMenuOpen] = useState(false);
 
   // Audio mute/unmute state
   const [isMuted, setIsMuted] = useState(false);
@@ -209,7 +217,6 @@ export default function App() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [selectedMemberProfile, setSelectedMemberProfile] = useState<any | null>(null);
-  const [isLunaProfilePreview, setIsLunaProfilePreview] = useState(false);
   const [memberProfileError, setMemberProfileError] = useState("");
   // UI gate only (Firestore rules enforce hasTarotPermission). Derived from the user's Firestore document, not the
   // admin-portal session flag. tarotReader keeps the verified-email requirement because the rules require it too.
@@ -755,7 +762,7 @@ export default function App() {
     }
   };
 
-  const handleSaveProfile = async (displayName: string, photo: File | null): Promise<boolean> => {
+  const handleSaveProfile = async (displayName: string, bio: string, spiritualInterests: string, photo: File | null): Promise<boolean> => {
     if (!currentUser) {
       setProfileSaveError("Sign in again before saving your profile.");
       return false;
@@ -780,6 +787,8 @@ export default function App() {
 
       await withTimeout(updateDoc(doc(db, "users", currentUser.uid), {
         displayName,
+        bio,
+        spiritualInterests,
         ...((uploadedAvatarUrl || currentAvatarUrl) ? { avatarUrl: uploadedAvatarUrl || currentAvatarUrl } : {}),
         updatedAt: new Date().toISOString()
       }), "Saving your profile");
@@ -812,13 +821,7 @@ export default function App() {
     }
 
     try {
-      const profileSnapshot = await getDoc(doc(db, "users", uid));
-      if (!profileSnapshot.exists()) {
-        setMemberProfileError("That member profile is no longer available.");
-        return;
-      }
-      setIsLunaProfilePreview(false);
-      setSelectedMemberProfile({ uid: profileSnapshot.id, ...profileSnapshot.data() });
+      setSelectedMemberProfile(await loadPublicMemberProfile(uid));
     } catch (error) {
       console.error("Failed to load member profile:", error);
       setMemberProfileError("Unable to load that member profile. Please try again.");
@@ -1219,23 +1222,47 @@ export default function App() {
   };
 
   // Securely trigger Stripe Connect Express onboarding link
+  const [connectInfo, setConnectInfo] = useState<{ linked: boolean; ready: boolean; reason?: string } | null>(null);
+  const [connectError, setConnectError] = useState("");
+
+  // Readiness is read live from Stripe by the server; the account id never comes from the browser.
+  useEffect(() => {
+    if (!currentUser || currentUser.isAnonymous || !isAdminAuthenticated) { setConnectInfo(null); return; }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/connect/status", { headers: { Authorization: "Bearer " + (await currentUser.getIdToken()) } });
+        const data = await res.json();
+        if (!cancelled) {
+          if (res.ok) { setConnectInfo(data); setConnectError(""); }
+          else setConnectError(data.error || "Could not read payout status.");
+        }
+      } catch {
+        if (!cancelled) setConnectError("Could not read payout status.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.uid, isAdminAuthenticated, activeTab]);
+
   const handleConnectStripe = async () => {
     if (!currentUser) return;
+    setConnectError("");
     try {
       playCelestialSound("success");
       const res = await fetch("/api/create-connect-onboarding", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUser.uid })
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + (await currentUser.getIdToken()) },
+        body: "{}"
       });
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;
       } else {
-        alert("Connect onboarding link failed.");
+        setConnectError(data.error || "Connect onboarding link failed.");
       }
     } catch (err) {
       console.error("Stripe Connect error:", err);
+      setConnectError("Connect onboarding link failed.");
     }
   };
 
@@ -1524,17 +1551,17 @@ export default function App() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#070412]/70 via-transparent to-[#070412]/70" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#070412]/40 via-transparent to-[#070412]/70" />
         <div
-          className="hidden lg:block absolute top-1/2 left-[4%] xl:left-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 -rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          className="hidden 2xl:block absolute top-1/2 left-[2%] w-[9vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 -rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
           style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
         />
         <div
-          className="hidden lg:block absolute top-1/2 right-[4%] xl:right-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          className="hidden 2xl:block absolute top-1/2 right-[2%] w-[9vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
           style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
         />
       </div>
 
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
-      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
+      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 overflow-hidden ${activeTab === "live" || activeTab === "community" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md md:max-w-3xl lg:max-w-5xl 2xl:max-w-6xl h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
         
         {/* Phone-only scenery inside the app column, beneath all content */}
         {activeTab !== "live" && (
@@ -1635,7 +1662,7 @@ export default function App() {
         </header>}
 
         {/* Main Content View Switcher */}
-        <main className={`flex-1 min-h-0 z-10 overflow-y-auto ${activeTab === "live" ? "px-0 py-0" : "px-4 py-4"}`}>
+        <main className={`flex-1 min-h-0 z-10 overflow-y-auto ${activeTab === "live" ? "px-0 py-0" : activeTab === "community" ? "px-4 py-5 sm:px-6 lg:px-8" : "px-4 py-4 md:px-6 md:py-5 lg:px-8"}`}>
 
 
           {!isAuthLoading && !currentUser && !hasSkippedAuth && activeTab !== "dashboard" ? (
@@ -2014,17 +2041,17 @@ export default function App() {
                   </div>
 
                   {/* THREE CARDS LAYOUT */}
-                  <div className="grid grid-cols-3 gap-2 py-4">
+                  <div className="mx-auto grid w-full max-w-2xl grid-cols-3 justify-items-center gap-2 py-4 sm:gap-4 md:gap-6">
                     {drawnCards.map((item, index) => {
                       const positionLabel = index === 0 ? "Past" : index === 1 ? "Present" : "Future";
                       return (
-                        <div key={index} className="flex flex-col items-center space-y-2">
+                        <div key={index} className="flex w-full flex-col items-center space-y-2">
                           <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold font-display">
                             {positionLabel}
                           </span>
 
                           {/* Interactive Card Container */}
-                          <div className="perspective-1000 w-full aspect-[2/3] max-h-56">
+                          <div className="perspective-1000 mx-auto w-full max-w-[11rem] aspect-[2/3]">
                             <div
                               onClick={() => handleFlipCard(index)}
                               className={`w-full h-full duration-700 transform-style-3d cursor-pointer relative ${
@@ -2099,7 +2126,7 @@ export default function App() {
                   </div>
 
                   {/* INTERPRETATIONS SECTION (Visible dynamically as they are flipped) */}
-                  <div className="space-y-4">
+                  <div className="mx-auto w-full max-w-2xl space-y-4">
                     {drawnCards.some((c) => c.isFlipped) && (
                       <h3 className="font-display text-xs tracking-widest text-slate-400 uppercase font-bold pl-1">
                         Drawn Interpretations
@@ -2573,14 +2600,26 @@ export default function App() {
               onViewMemberProfile={handleViewMemberProfile}
             />
           )}
-          {activeTab === "live" && selectedMemberProfile && (
+          {activeTab === "community" && <CommunityBoard onSignIn={() => setActiveTab("dashboard")} onViewProfile={handleViewMemberProfile} />}
+          {activeTab === "scheduling" && <Scheduling onSignIn={() => setActiveTab("dashboard")} isAdmin={isAdminAuthenticated} />}
+          {activeTab === "connections" && (currentUser && !currentUser.isAnonymous ? (
+            <Connections uid={currentUser.uid} />
+          ) : (
+            <section className="mx-auto max-w-xl rounded-2xl border border-mystic-gold/40 bg-[#100a20]/90 px-5 py-10 text-center">
+              <h2 className="font-display text-xl text-white">Connections</h2>
+              <p className="mt-2 text-sm text-slate-400">Sign in with a member account to find members and manage connections.</p>
+              <button type="button" onClick={() => setActiveTab("dashboard")} className="mt-4 min-h-11 rounded-lg bg-mystic-gold px-4 text-sm font-bold text-[#0b081c]">Sign in</button>
+            </section>
+          ))}
+          {(activeTab === "groupChats" || activeTab === "teams") && <ToolComingSoon toolId={activeTab} onOpenCommunity={() => setActiveTab("community")} />}
+          {(activeTab === "live" || activeTab === "community") && selectedMemberProfile && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
               <div className="w-full max-w-md">
                 <MemberProfile member={selectedMemberProfile} onClose={() => setSelectedMemberProfile(null)} />
               </div>
             </div>
           )}
-          {activeTab === "live" && memberProfileError && (
+          {(activeTab === "live" || activeTab === "community") && memberProfileError && (
             <div role="alert" className="fixed inset-x-4 top-6 z-[101] mx-auto max-w-md rounded-lg border border-red-400/30 bg-red-950/90 px-3 py-2 text-center text-xs text-red-200 shadow-xl">
               {memberProfileError}
               <button type="button" onClick={() => setMemberProfileError("")} className="ml-2 font-semibold underline">Close</button>
@@ -3156,15 +3195,17 @@ export default function App() {
                         <div className="space-y-0.5">
                           <span className="text-xs font-bold text-white block">Stripe Connect Status:</span>
                           <span className="text-[9px] font-mono text-teal-300 uppercase font-semibold">
-                            {dbUserDoc?.stripeConnectId ? "Onboarded (Active)" : "Not Onboarded"}
+                            {connectInfo?.ready ? "Ready for tips" : connectInfo?.linked ? "Onboarding incomplete" : "Not linked"}
                           </span>
+                          {connectInfo && !connectInfo.ready && connectInfo.reason && <span className="block text-[9px] text-slate-400">{connectInfo.reason}</span>}
+                          {connectError && <span role="alert" className="block text-[9px] text-rose-300">{connectError}</span>}
                         </div>
                         <button
                           type="button"
                           onClick={handleConnectStripe}
                           className="py-1.5 px-3 rounded bg-teal-400 text-black font-bold text-[10px] uppercase hover:brightness-110 active:scale-95 transition-all"
                         >
-                          {dbUserDoc?.stripeConnectId ? "Go to Dashboard" : "Setup Connect Link"}
+                          {connectInfo?.ready ? "Update payout details" : connectInfo?.linked ? "Continue onboarding" : "Set up payouts"}
                         </button>
                       </div>
                     </div>
@@ -3246,24 +3287,25 @@ export default function App() {
                 avatarUrl: dbUserDoc?.avatarUrl || currentUser.photoURL || null
               } satisfies UserIdentity}
               email={currentUser.email || ""}
+              bio={typeof dbUserDoc?.bio === "string" ? dbUserDoc.bio : ""}
+              spiritualInterests={typeof dbUserDoc?.spiritualInterests === "string" ? dbUserDoc.spiritualInterests : ""}
               gemBalance={typeof dbUserDoc?.gemBalance === "number" ? dbUserDoc.gemBalance : 0}
               isSaving={isProfileSaving}
               saveError={profileSaveError}
               saveMessage={profileSaveMessage}
               onSave={handleSaveProfile}
+              onBuyGems={handleBuyGems}
             />
           )}
 
           {/* ==================== 7. DEDICATED ADMIN CONSOLE VIEW ==================== */}
           {activeTab === "admin" && (
             <div className="space-y-6 fade-in text-left">
-              {(selectedMemberProfile || isLunaProfilePreview) && (
+              {selectedMemberProfile && (
                 <MemberProfile
                   member={selectedMemberProfile}
-                  previewLuna={isLunaProfilePreview}
                   onClose={() => {
                     setSelectedMemberProfile(null);
-                    setIsLunaProfilePreview(false);
                   }}
                 />
               )}
@@ -3280,19 +3322,6 @@ export default function App() {
                     </span>
                   </div>
                 </div>
-
-                {import.meta.env.DEV && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedMemberProfile(null);
-                      setIsLunaProfilePreview(true);
-                    }}
-                    className="rounded border border-dashed border-teal-300/50 bg-teal-950/20 px-2.5 py-1.5 text-[10px] font-bold tracking-wider text-teal-200 transition hover:border-mystic-gold/60 hover:text-mystic-gold"
-                  >
-                    PREVIEW LUNA
-                  </button>
-                )}
 
                 <button
                   type="button"
@@ -4485,8 +4514,8 @@ export default function App() {
     </div>
 
       {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
-        <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
-          isAdminAuthenticated ? "grid-cols-7" : "grid-cols-6"
+        <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full ${activeTab === "live" || activeTab === "community" ? "max-w-none" : "max-w-md md:max-w-3xl lg:max-w-5xl 2xl:max-w-6xl"} h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
+          isAdminAuthenticated ? "grid-cols-9" : "grid-cols-8"
         }`}>
           
           <button
@@ -4542,6 +4571,29 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => { setActiveTab("community"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "community" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <UsersRound className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Community</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setIsToolsMenuOpen(true); playCelestialSound("flip"); }}
+            aria-label="Celestial Tools"
+            aria-haspopup="dialog"
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              isToolsMenuOpen || CELESTIAL_TOOLS.some((tool) => tool.id === activeTab) ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <img src="/celestial-owl.png" alt="" aria-hidden="true" className={`h-6 w-6 rounded-full object-cover [object-position:49%_50%] ${isToolsMenuOpen || CELESTIAL_TOOLS.some((tool) => tool.id === activeTab) ? "ring-1 ring-mystic-gold" : ""}`} />
+            <span className="text-[8px] font-semibold leading-[9px] tracking-tight mt-0.5 text-center">Celestial<br />Tools</span>
+          </button>
+
+          <button
             onClick={() => {
               playCelestialSound("flip");
               if (isAuthLoading) {
@@ -4571,6 +4623,12 @@ export default function App() {
           )}
 
         </nav>
+        {isToolsMenuOpen && (
+          <CelestialToolsMenu
+            onClose={() => setIsToolsMenuOpen(false)}
+            onSelect={(id: CelestialToolId) => { setIsToolsMenuOpen(false); setActiveTab(id); playCelestialSound("flip"); }}
+          />
+        )}
     </>
   );
 }
