@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Music2,
   PawPrint,
+  RefreshCw,
   Send,
   Sparkles,
   Users,
@@ -69,6 +70,12 @@ type RemoteReading = {
 };
 
 type LiveSessionDoc = LiveSessionMeta & { ownerUid: string; sessionId: string; startedAt: number; updatedAt: number };
+type BroadcasterEarnings = {
+  totalGemsEarned: number;
+  todayGemsEarned: number;
+  lifetimeGemsEarned: number;
+  transactions: { id: string; date: string; viewerName: string; gemsAmount: number; status: string }[];
+};
 
 // A published broadcast is considered live while its heartbeat is recent
 const BROADCAST_HEARTBEAT_MS = 30000;
@@ -141,6 +148,10 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [lifetimeGemsReceived, setLifetimeGemsReceived] = useState(0);
   const [giftsReceived, setGiftsReceived] = useState(0);
   const [hasCreatorAccess, setHasCreatorAccess] = useState(false);
+  const [earnings, setEarnings] = useState<BroadcasterEarnings | null>(null);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsError, setEarningsError] = useState("");
+  const [earningsRefresh, setEarningsRefresh] = useState(0);
   const [viewerCount, setViewerCount] = useState(742);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
   const [isGiftSheetOpen, setIsGiftSheetOpen] = useState(false);
@@ -156,6 +167,35 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [liveSessions, setLiveSessions] = useState<LiveSessionDoc[]>([]);
   const [clock, setClock] = useState(() => Date.now());
   const [guestUid, setGuestUid] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (screen !== "earnings") return;
+    let cancelled = false;
+    setEarnings(null);
+    setEarningsError("");
+    setEarningsLoading(true);
+    void (async () => {
+      const user = auth.currentUser;
+      if (!user || user.isAnonymous || user.uid !== currentUserId) {
+        throw new Error("Sign in with your broadcaster account to view earnings.");
+      }
+      const token = await user.getIdToken();
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const response = await fetch(`/api/live/earnings?timeZone=${encodeURIComponent(timeZone)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not load broadcaster earnings.");
+      return data as BroadcasterEarnings;
+    })().then((data) => {
+      if (!cancelled) setEarnings(data);
+    }).catch((error) => {
+      if (!cancelled) setEarningsError(error instanceof Error ? error.message : "Could not load broadcaster earnings.");
+    }).finally(() => {
+      if (!cancelled) setEarningsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [screen, currentUserId, earningsRefresh]);
 
   // Signed-out visitors get an anonymous, viewer-only Firebase identity (own UID, no profile doc)
   useEffect(() => {
@@ -481,9 +521,45 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     setNotice(`${gift.name} sent to ${selectedBroadcaster.name}`);
   };
 
-  const sendCashTip = (amount: string) => {
-    setNotice(`Stripe checkout is not connected. No $${amount} tip was charged.`);
-    setIsGiftSheetOpen(false);
+  const [cashTips, setCashTips] = useState<{ enabled: boolean; message: string }>({ enabled: false, message: "" });
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!isGiftSheetOpen || screen !== "viewer" || !activeSession || !user || user.isAnonymous) return;
+    let cancelled = false;
+    setCashTips({ enabled: false, message: "" });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/live/tip-status?sessionId=${encodeURIComponent(activeSession.sessionId)}`, { headers: { Authorization: `Bearer ${await user.getIdToken()}` } });
+        const data = await response.json();
+        if (!cancelled) setCashTips({ enabled: response.ok && data.enabled === true, message: data.reason || data.error || "Paid tips are unavailable right now." });
+      } catch {
+        if (!cancelled) setCashTips({ enabled: false, message: "Paid tips are unavailable right now." });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isGiftSheetOpen, screen, activeSession?.sessionId]);
+
+  // The server resolves the broadcaster from the live session and prices the checkout; only the amount comes from here.
+  const sendCashTip = async (amount: string) => {
+    const amountCents = Math.round(Number(amount) * 100);
+    const user = auth.currentUser;
+    if (!user || user.isAnonymous || !activeSession) {
+      setNotice("Sign in to tip a live broadcaster.");
+      return;
+    }
+    try {
+      const response = await fetch("/api/live/tip-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
+        body: JSON.stringify({ sessionId: activeSession.sessionId, amountCents })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || typeof data.url !== "string") throw new Error(data.error || "Tip checkout could not be started.");
+      window.location.href = data.url;
+    } catch (error) {
+      setNotice(`${error instanceof Error ? error.message : "Tip checkout could not be started."} You were not charged.`);
+      setIsGiftSheetOpen(false);
+    }
   };
 
   const sendChat = (event: React.FormEvent<HTMLFormElement>) => {
@@ -571,7 +647,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         <header className="flex items-center justify-between">{isLiveNow ? backButton(() => { if (myBroadcaster) setSelectedBroadcaster(myBroadcaster); setScreen("broadcast"); }, "Back to your live broadcast") : backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
         {notice && <p role="status" className="rounded-lg border border-mystic-gold/30 bg-mystic-gold/10 px-3 py-2 text-center text-xs text-mystic-gold">{notice}</p>}
         <button onClick={() => setScreen("setup")} className="flex w-full items-center justify-between rounded-xl border border-mystic-gold/40 bg-gradient-to-r from-mystic-gold/15 to-transparent px-4 py-3 text-left"><span><strong className="block font-display text-sm text-mystic-gold">Go live</strong><span className="text-xs text-slate-400">Start a broadcast with your community</span></span><ChevronRight className="h-5 w-5 text-mystic-gold" /></button>
-        <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator</button>}</div>
+        <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && isAuthorizedReader && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator earnings</button>}</div>
           <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"><button onClick={() => setSelectedTopic("All")} className={`shrink-0 rounded-full border px-3 py-2 text-xs ${selectedTopic === "All" ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}>All</button>{topics.map(({ name, icon: Icon }) => <button key={name} onClick={() => setSelectedTopic(name)} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs ${selectedTopic === name ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}><Icon className="h-3.5 w-3.5" />{name}</button>)}</div>
           <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl) ? <img src={(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl)} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
         </section>
@@ -595,9 +671,47 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   }
 
   if (screen === "earnings") {
-    const stats = [["Today's earnings", "$86.50"], ["This week", "$412.00"], ["This month", "$1,284.75"], ["Total earnings", "$8,640.25"], ["Tips", "$530.00"], ["Gift / Gem earnings", "$754.75"], ["Pending balance", "$145.00"], ["Available balance", "$1,139.75"]];
     return (
-      <section className="mx-auto max-w-lg space-y-5 pb-8 text-slate-100"><header className="flex items-center gap-3">{backButton(() => setScreen("directory"))}<div><p className="text-[10px] uppercase tracking-[0.18em] text-teal-300">Private creator view</p><h1 className="font-display text-xl text-white">Earnings overview</h1></div></header><div className="grid grid-cols-2 gap-x-5 gap-y-4 border-y border-white/10 py-5">{stats.map(([label, value]) => <div key={label}><p className="text-xs text-slate-400">{label}</p><strong className="mt-1 block font-display text-lg text-mystic-gold">{value}</strong></div>)}</div><section><h2 className="mb-3 text-sm font-semibold text-white">Payout history</h2><div className="divide-y divide-white/10">{[["Sep 28, 2026", "$240.00", "Paid"], ["Sep 14, 2026", "$185.50", "Paid"], ["Aug 31, 2026", "$312.00", "Paid"]].map(([date, amount, status]) => <div key={date} className="flex items-center justify-between py-3 text-sm"><span className="text-slate-300">{date}</span><span className="font-medium text-white">{amount}</span><span className="text-xs text-teal-300">{status}</span></div>)}</div></section><p className="text-xs text-slate-500">Example figures only. Payouts are not enabled.</p></section>
+      <section className="mx-auto max-w-3xl space-y-5 pb-8 text-slate-100">
+        <header className="flex items-center gap-3">
+          {backButton(() => setScreen("directory"))}
+          <div><p className="text-[10px] uppercase tracking-[0.18em] text-teal-300">Private broadcaster view</p><h1 className="font-display text-xl text-white">Gem earnings</h1></div>
+        </header>
+        <p className="rounded-xl border border-mystic-gold/20 bg-mystic-gold/[0.06] p-3 text-xs leading-relaxed text-slate-300">
+          These are virtual Gems from confirmed viewer gifts, not cash or withdrawable earnings. Purchased Gems are not included. Stripe cash tips are tracked separately.
+        </p>
+        {earningsLoading ? (
+          <div role="status" className="flex min-h-32 items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#120d20] text-sm text-slate-300"><RefreshCw className="h-4 w-4 animate-spin" />Loading verified tip earnings…</div>
+        ) : earningsError ? (
+          <div role="alert" className="space-y-3 rounded-xl border border-rose-400/25 bg-rose-950/20 p-4 text-sm text-rose-200"><p>{earningsError}</p><button onClick={() => setEarningsRefresh((n) => n + 1)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-rose-300/30 px-3 text-xs font-semibold hover:bg-rose-400/10"><RefreshCw className="h-3.5 w-3.5" />Retry</button></div>
+        ) : earnings && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                ["Total gems earned", earnings.totalGemsEarned],
+                ["Today", earnings.todayGemsEarned],
+                ["Lifetime gems earned", earnings.lifetimeGemsEarned],
+              ].map(([label, value]) => <div key={label} className="rounded-xl border border-mystic-gold/25 bg-gradient-to-br from-[#1d123a]/90 to-[#0a0618]/90 p-4"><p className="text-xs text-slate-400">{label}</p><strong className="mt-1 block font-display text-2xl text-mystic-gold">{formatCount(Number(value))}<span className="ml-1 text-sm font-normal">Gems</span></strong></div>)}
+            </div>
+            {earnings.totalGemsEarned !== earnings.lifetimeGemsEarned && <p className="text-[11px] leading-relaxed text-slate-500">The lifetime total includes verified legacy gift totals. Individual viewer records are available for gifts recorded in the transaction history.</p>}
+            <section className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20]">
+              <div className="border-b border-white/10 px-4 py-3"><h2 className="font-display text-base text-white">Viewer gift history</h2><p className="mt-1 text-[11px] text-slate-400">Confirmed virtual-Gem gifts only.</p></div>
+              {earnings.transactions.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-slate-400">{earnings.lifetimeGemsEarned > 0 ? "The lifetime aggregate includes earlier verified gifts, but individual viewer records are not available for those gifts." : "No verified viewer Gem tips yet. Earnings will appear here after a gift is confirmed."}</p>
+              ) : (
+                <div className="divide-y divide-white/10">
+                  {earnings.transactions.map((item) => <div key={item.id} className="grid grid-cols-2 gap-2 px-4 py-3 text-sm sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto_auto] sm:items-center">
+                    <span className="col-span-2 min-w-0 truncate font-medium text-white sm:col-span-1">{item.viewerName}</span>
+                    <span className="text-xs text-slate-400">{new Date(item.date).toLocaleString()}</span>
+                    <strong className="text-right text-teal-200">+{formatCount(item.gemsAmount)} Gems</strong>
+                    <span className="col-span-2 text-[10px] capitalize text-slate-500 sm:col-span-1 sm:text-right">{item.status}</span>
+                  </div>)}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </section>
     );
   }
 
@@ -695,6 +809,8 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         viewerGems={viewerGems}
         onSendGift={sendGift}
         onSendCashTip={sendCashTip}
+        cashTipsEnabled={cashTips.enabled}
+        cashTipsMessage={cashTips.message}
         customTip={customTip}
         setCustomTip={setCustomTip}
         isGiftSheetOpen={isGiftSheetOpen}
