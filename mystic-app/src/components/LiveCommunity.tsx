@@ -167,6 +167,8 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [liveSessions, setLiveSessions] = useState<LiveSessionDoc[]>([]);
   const [clock, setClock] = useState(() => Date.now());
   const [guestUid, setGuestUid] = useState<string | null>(null);
+  const [guestAuthUnavailable, setGuestAuthUnavailable] = useState(false);
+  const [directoryError, setDirectoryError] = useState(false);
 
   useEffect(() => {
     if (screen !== "earnings") return;
@@ -212,7 +214,10 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       }
       const credential = await signInAnonymously(auth);
       if (!cancelled) setGuestUid(credential.user.uid);
-    })().catch((error) => console.error("Anonymous Live viewing is unavailable:", error));
+    })().catch((error) => {
+      console.error("Anonymous Live viewing is unavailable:", error);
+      if (!cancelled) setGuestAuthUnavailable(true);
+    });
     return () => { cancelled = true; };
   }, [currentUserId]);
   const viewerUid = currentUserId ?? guestUid;
@@ -392,8 +397,12 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   useEffect(() => {
     if (!viewerUid) return;
     const unsubscribe = onSnapshot(query(collection(db, "liveSessions"), where("status", "==", "live")), (snapshot) => {
+      setDirectoryError(false);
       setLiveSessions(snapshot.docs.map((item) => item.data() as LiveSessionDoc));
-    }, (error) => console.error("Failed to sync live sessions:", error));
+    }, (error) => {
+      console.error("Failed to sync live sessions:", error);
+      setDirectoryError(true);
+    });
     return unsubscribe;
   }, [viewerUid]);
 
@@ -649,7 +658,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         <button onClick={() => setScreen("setup")} className="flex w-full items-center justify-between rounded-xl border border-mystic-gold/40 bg-gradient-to-r from-mystic-gold/15 to-transparent px-4 py-3 text-left"><span><strong className="block font-display text-sm text-mystic-gold">Go live</strong><span className="text-xs text-slate-400">Start a broadcast with your community</span></span><ChevronRight className="h-5 w-5 text-mystic-gold" /></button>
         <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && isAuthorizedReader && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator earnings</button>}</div>
           <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"><button onClick={() => setSelectedTopic("All")} className={`shrink-0 rounded-full border px-3 py-2 text-xs ${selectedTopic === "All" ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}>All</button>{topics.map(({ name, icon: Icon }) => <button key={name} onClick={() => setSelectedTopic(name)} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs ${selectedTopic === name ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}><Icon className="h-3.5 w-3.5" />{name}</button>)}</div>
-          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl) ? <img src={(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl)} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
+          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.length === 0 && directoryError && <p role="alert" className="col-span-full rounded-lg border border-rose-400/25 bg-rose-950/20 px-3 py-2 text-center text-xs text-rose-200">Live is unavailable right now. Check your connection and try again.</p>}{visibleBroadcasters.length === 0 && !directoryError && !viewerUid && guestAuthUnavailable && <div className="col-span-full space-y-3 py-6 text-center"><p className="text-sm text-slate-300">Sign in to watch live broadcasts.</p><button onClick={onExit} className="rounded-lg bg-mystic-gold px-4 py-2 text-xs font-semibold text-[#100b1c] active:scale-95">Return to sign in</button></div>}{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl) ? <img src={(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl)} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && !directoryError && !(guestAuthUnavailable && !viewerUid) && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
         </section>
       </section>
     );
