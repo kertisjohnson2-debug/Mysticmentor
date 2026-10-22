@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- REUSABLE PRIMITIVE HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Secure server-enforced bootstrapped administrator authorization logic
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- VALIDATION HELPERS ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
+             data.uid == request.auth.uid &&
+             data.email is string &&
+             data.role in ['member', 'admin'] &&
+             data.gemBalance is int && data.gemBalance >= 0 &&
+             data.cloutPoints is int && data.cloutPoints >= 0;
+    }
+
+    function isValidReading(data) {
+      return data.keys().hasAll(['id', 'userId', 'date', 'topic', 'cards', 'summary', 'createdAt']) &&
+             data.keys().hasOnly(['id', 'userId', 'date', 'topic', 'cards', 'summary', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.topic is string && data.topic.size() <= 128 &&
+             data.summary is string && data.summary.size() <= 2048 &&
+             data.cards is list;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'userId', 'type', 'gemsAmount', 'description', 'createdAt']) &&
+             data.keys().hasOnly(['id', 'userId', 'type', 'gemsAmount', 'giftId', 'description', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['recharge', 'spend_gift', 'tip'] &&
+             data.gemsAmount is int &&
+             data.description is string && data.description.size() <= 256;
+    }
+
+    // --- COLLECTION MATCHES ---
+
+    // 1. Users Profile
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(userId) && isValidUser(request.resource.data) && (
+        // Prevent normal users from self-assigning admin roles during creation
+        request.resource.data.role == "member" || (request.resource.data.role == "admin" && request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true)
+      );
+      allow update: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data) && (
+        // Standard users cannot change their own gem balances, clout points, or roles!
+        request.resource.data.gemBalance == resource.data.gemBalance &&
+        request.resource.data.cloutPoints == resource.data.cloutPoints &&
+        request.resource.data.role == resource.data.role
+      ) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // 2. Private tarot reading history
+    match /users/{userId}/readings/{readingId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(readingId) && isValidReading(request.resource.data);
+      allow update: if isSignedIn() && isOwner(userId) && isValidId(readingId) && isValidReading(request.resource.data);
+      allow delete: if isSignedIn() && isOwner(userId);
+    }
+
+    // 3. Isolated virtual ledger records (Immutable transactions)
+    match /users/{userId}/transactions/{transactionId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(transactionId) && isValidTransaction(request.resource.data);
+      allow update, delete: if false; // Transactions are strictly read-only after creation
+    }
+
+    // 4. Tarot deck registry
+    match /tarot_deck/{cardId} {
+      allow read: if true; // Any visitor/guest can read the cards
+      allow write: if isAdmin(); // Only admins can add, update or delete card definitions
+    }
+
+    // 5. Gifts catalog
+    match /gifts_catalog/{giftId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 6. Global Admin settings
+    match /admin_settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+  }
+}
