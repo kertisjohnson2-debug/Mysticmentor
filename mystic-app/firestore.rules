@@ -12,14 +12,18 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isCommunityMember() {
+      return isSignedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     function isOwner(userId) {
       return request.auth.uid == userId;
     }
 
     // Secure server-enforced bootstrapped administrator authorization logic
     function isAdmin() {
-      return isSignedIn() && (
-        (request.auth.token.email_verified == true && request.auth.token.email == "kertisjohnson7@gmail.com") ||
+      return isSignedIn() && request.auth.token.email_verified == true && (
+        request.auth.token.email == "kertisjohnson7@gmail.com" ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
       );
     }
@@ -57,11 +61,13 @@ service cloud.firestore {
     // --- VALIDATION HELPERS ---
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role', 'gemBalance', 'cloutPoints', 'createdAt', 'updatedAt']) &&
-             data.keys().hasOnly(['uid', 'email', 'displayName', 'avatarUrl', 'role', 'tarotReader', 'suspended', 'gemBalance', 'cloutPoints', 'lifetimeGemsReceived', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['uid', 'email', 'displayName', 'avatarUrl', 'bio', 'spiritualInterests', 'role', 'tarotReader', 'suspended', 'gemBalance', 'cloutPoints', 'lifetimeGemsReceived', 'createdAt', 'updatedAt']) &&
              data.uid == request.auth.uid &&
              data.email is string &&
              data.get('displayName', '') is string && data.get('displayName', '').size() <= 100 &&
              data.get('avatarUrl', '') is string && data.get('avatarUrl', '').size() <= 300000 &&
+             data.get('bio', '') is string && data.get('bio', '').size() <= 500 &&
+             data.get('spiritualInterests', '') is string && data.get('spiritualInterests', '').size() <= 500 &&
              data.role in ['member', 'admin'] &&
              data.get('tarotReader', false) is bool &&
              data.get('suspended', false) is bool &&
@@ -92,7 +98,7 @@ service cloud.firestore {
 
     // 1. Users Profile
     match /users/{userId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow read: if isSignedIn() && isOwner(userId);
       allow create: if isSignedIn() && isOwner(userId) && isValidId(userId) && isValidUser(request.resource.data) && (
         // Prevent normal users from self-assigning admin roles during creation
         request.resource.data.role == "member" || (request.resource.data.role == "admin" && request.auth.token.email == "kertisjohnson7@gmail.com" && request.auth.token.email_verified == true)
@@ -103,15 +109,10 @@ service cloud.firestore {
         && request.resource.data.get('lifetimeGemsReceived', 0) == 0;
       allow update: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data) && (
         // Standard users cannot change their own gem balances, clout points, or roles!
-        request.resource.data.gemBalance == resource.data.gemBalance &&
-        request.resource.data.cloutPoints == resource.data.cloutPoints &&
-        request.resource.data.get('lifetimeGemsReceived', 0) == resource.data.get('lifetimeGemsReceived', 0) &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.get('tarotReader', false) == resource.data.get('tarotReader', false) &&
-        request.resource.data.get('suspended', false) == resource.data.get('suspended', false) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'bio', 'spiritualInterests', 'updatedAt']) &&
         resource.data.get('suspended', false) == false
-      ) || isAdmin();
-      allow delete: if isAdmin();
+      );
+      allow delete: if false;
     }
 
     // Public broadcaster rank totals: written only by the server (Admin SDK) when a Live gift is confirmed
@@ -122,7 +123,7 @@ service cloud.firestore {
 
     // 2. Private tarot reading history
     match /users/{userId}/readings/{readingId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow read: if isSignedIn() && isOwner(userId);
       allow create: if isSignedIn() && isOwner(userId) && isValidId(readingId) && isValidReading(request.resource.data);
       allow update: if isSignedIn() && isOwner(userId) && isValidId(readingId) && isValidReading(request.resource.data);
       allow delete: if isSignedIn() && isOwner(userId);
@@ -151,30 +152,30 @@ service cloud.firestore {
 
     // 3. Isolated virtual ledger records (Immutable transactions)
     match /users/{userId}/transactions/{transactionId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow create: if isSignedIn() && isOwner(userId) && isValidId(transactionId) && isValidTransaction(request.resource.data);
-      allow update, delete: if false; // Transactions are strictly read-only after creation
+      allow read: if isSignedIn() && isOwner(userId);
+      // Transactions are written only by trusted server code (Admin SDK), never by a browser.
+      allow create, update, delete: if false;
     }
 
     // 4. Tarot deck registry
     match /tarot_deck/{cardId} {
       allow read: if true; // Any visitor/guest can read the cards
-      allow write: if isAdmin(); // Only admins can add, update or delete card definitions
+      allow write: if false; // Administrative mutations use server-validated PIN sessions.
     }
 
     // 5. Gifts catalog
     match /gifts_catalog/{giftId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if false;
     }
 
-    // 6. Global Admin settings
+    // 6. Global settings. Community settings are intentionally public; financials require verified admin auth.
     match /admin_settings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow get: if settingId == 'community' || (settingId == 'financials' && isAdmin());
+      allow write: if false;
     }
 
-    // 7. Global Financial Records (Admin only read-only ledger)
+    // 7. Global Financial Records (verified administrators may read; writes remain server-only)
     match /financial_records/{recordId} {
       allow read: if isAdmin();
       allow write: if false; // strictly write-protected from client SDKs
@@ -280,7 +281,33 @@ service cloud.firestore {
     match /liveReadings/{uid} {
       allow read: if isSignedIn();
       allow create, update: if isOwner(uid) && hasTarotPermission() && isValidLiveReading(request.resource.data, uid);
-      allow delete: if isOwner(uid) || isAdmin();
+      allow delete: if isOwner(uid);
+    }
+
+    // Community content is read-only to clients; authenticated server routes own all writes.
+    match /communityPosts/{postId} {
+      allow read: if isCommunityMember() && resource.data.status == 'published';
+      allow create, update, delete: if false;
+
+      match /replies/{replyId} {
+        allow read: if isCommunityMember() &&
+          get(/databases/$(database)/documents/communityPosts/$(postId)).data.status == 'published';
+        allow create, update, delete: if false;
+      }
+    }
+
+    // Reader schedules and bookings are owned by authenticated server routes; clients can never read or write them directly.
+    match /readerSchedules/{readerUid} {
+      allow read, write: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow read, write: if false;
+    }
+
+    match /communityReports/{reportId} {
+      allow read: if false;
+      allow create, update, delete: if false;
     }
 
   }

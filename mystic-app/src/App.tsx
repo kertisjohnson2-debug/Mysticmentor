@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { 
   auth, 
   db, 
@@ -71,7 +72,8 @@ import {
   Gem,
   Plus,
   Play,
-  Grid
+  Grid,
+  UsersRound
 } from "lucide-react";
 
 import {
@@ -85,8 +87,19 @@ import {
 } from "./data/spiritualData";
 import CelestialOnboarding from "./components/CelestialOnboarding";
 import LiveCommunity from "./components/LiveCommunity";
+import AdminImageControls from "./components/AdminImageControls";
 import MemberProfile from "./components/MemberProfile";
 import MyProfile from "./components/MyProfile";
+import CommunityBoard from "./components/CommunityBoard";
+import DailyAffirmation from "./components/DailyAffirmation";
+import AdminAccessGate, { AdminSecurityPanel } from "./components/AdminAccess";
+import { adminMemberAction, loadAdminPanel, revokeAdminAccess, type AdminSessionInfo } from "./lib/adminAccess";
+import { calculateLifePath, utcDateKey } from "./lib/dailyContent";
+import CelestialToolsMenu, { CELESTIAL_TOOLS, type CelestialToolId } from "./components/CelestialToolsMenu";
+import Scheduling from "./components/Scheduling";
+import Connections from "./components/Connections";
+import ToolComingSoon from "./components/ToolComingSoon";
+import { loadPublicMemberProfile } from "./lib/memberProfile";
 import TarotCardArt from "./components/TarotCardArt";
 import type { UserIdentity } from "./types/userProfile";
 
@@ -108,11 +121,15 @@ async function ensureServerProfile(user: { getIdToken: () => Promise<string> }, 
 
 export default function App() {
   const queryParams = new URLSearchParams(window.location.search);
+  const connectReturn = queryParams.get("connect") === "return" || queryParams.get("connect") === "refresh";
   const isSandboxCheckoutPath = window.location.pathname === "/stripe-sandbox-checkout";
   const isSandboxConnectPath = window.location.pathname === "/stripe-sandbox-connect-onboard";
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "dashboard" | "profile" | "admin">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "tarot" | "zodiac" | "numerology" | "live" | "community" | "scheduling" | "connections" | "groupChats" | "teams" | "dashboard" | "profile" | "admin" | "adminAccess" | "affirmation">("home");
+  const [isToolsMenuOpen, setIsToolsMenuOpen] = useState(false);
+  // Stripe onboarding returns to /dashboard?connect=return|refresh; land on the profile payout section
+  useEffect(() => { if (connectReturn) setActiveTab("profile"); }, []);
 
   // Audio mute/unmute state
   const [isMuted, setIsMuted] = useState(false);
@@ -156,10 +173,9 @@ export default function App() {
   });
 
   // --- ADMIN AUTH & STATE ---
+  // isAdminAuthenticated is true only after the server issues a passcode-verified admin session.
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [showAdminGate, setShowAdminGate] = useState(false);
-  const [adminPasscodeInput, setAdminPasscodeInput] = useState("");
-  const [adminGateError, setAdminGateError] = useState("");
+  const [adminSession, setAdminSession] = useState<AdminSessionInfo | null>(null);
 
   // --- MEMBER LANDING ENTRANCE GATE STATE ---
   const [hasSkippedAuth, setHasSkippedAuth] = useState(() => {
@@ -196,7 +212,7 @@ export default function App() {
   }, [activeTab]);
 
   // --- ADMIN PANEL SUB-STATES ---
-  const [adminSubTab, setAdminSubTab] = useState<"broadcast" | "deck" | "shuffle" | "staff" | "financials">("broadcast");
+  const [adminSubTab, setAdminSubTab] = useState<"broadcast" | "deck" | "shuffle" | "staff" | "financials" | "images" | "security">("broadcast");
   const [editingCardId, setEditingCardId] = useState<number | null>(null);
   const [cardEditForm, setCardEditForm] = useState<TarotCard | null>(null);
   const [deckFilter, setDeckFilter] = useState<"all" | "major" | "minor" | "hidden" | "edited">("all");
@@ -209,7 +225,7 @@ export default function App() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [selectedMemberProfile, setSelectedMemberProfile] = useState<any | null>(null);
-  const [isLunaProfilePreview, setIsLunaProfilePreview] = useState(false);
+  const [ownProfilePreview, setOwnProfilePreview] = useState<any | null>(null);
   const [memberProfileError, setMemberProfileError] = useState("");
   // UI gate only (Firestore rules enforce hasTarotPermission). Derived from the user's Firestore document, not the
   // admin-portal session flag. tarotReader keeps the verified-email requirement because the rules require it too.
@@ -218,6 +234,13 @@ export default function App() {
       dbUserDoc?.role === "admin" ||
       (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified) ||
       (currentUser.emailVerified && dbUserDoc?.tarotReader === true)
+    )
+  );
+  // UI visibility only; the server re-checks the admin role and passcode session for protected admin actions.
+  const isAdminAccount = Boolean(
+    currentUser && !currentUser.isAnonymous && currentUser.emailVerified && dbUserDoc?.suspended !== true && (
+      (dbUserDoc?.role === "admin" && dbUserDoc?.suspended !== true) ||
+      (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified)
     )
   );
   const [financialStats, setFinancialStats] = useState<any>({
@@ -277,6 +300,13 @@ export default function App() {
   const [selectedZodiac, setSelectedZodiac] = useState<ZodiacSign | null>(null);
   const [dailyHoroscope, setDailyHoroscope] = useState<{ status: "idle" | "loading" | "ready" | "error"; date: string; text: string }>({ status: "idle", date: "", text: "" });
   const [horoscopeRetry, setHoroscopeRetry] = useState(0);
+  const [horoscopeDay, setHoroscopeDay] = useState(() => utcDateKey(new Date()));
+  useEffect(() => {
+    const refreshDay = () => setHoroscopeDay(utcDateKey(new Date()));
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refreshDay); };
+  }, []);
   const selectedZodiacId = selectedZodiac?.id;
   useEffect(() => {
     if (!selectedZodiacId) { setDailyHoroscope({ status: "idle", date: "", text: "" }); return; }
@@ -284,10 +314,13 @@ export default function App() {
     setDailyHoroscope({ status: "loading", date: "", text: "" });
     fetch(`/api/horoscope/daily?sign=${encodeURIComponent(selectedZodiacId)}`)
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`Status ${res.status}`)))
-      .then((data) => { if (!cancelled) setDailyHoroscope({ status: "ready", date: String(data.date), text: String(data.horoscope) }); })
+      .then((data) => {
+        if (data.date !== horoscopeDay || typeof data.horoscope !== "string" || !data.horoscope.trim()) throw new Error("No current reading available");
+        if (!cancelled) setDailyHoroscope({ status: "ready", date: data.date, text: data.horoscope });
+      })
       .catch(() => { if (!cancelled) setDailyHoroscope({ status: "error", date: "", text: "" }); });
     return () => { cancelled = true; };
-  }, [selectedZodiacId, horoscopeRetry]);
+  }, [selectedZodiacId, horoscopeRetry, horoscopeDay, activeTab]);
 
   // --- NUMEROLOGY STATE ---
   const [dobMonth, setDobMonth] = useState("01");
@@ -470,6 +503,7 @@ export default function App() {
         setCurrentUser(null);
         setDbUserDoc(null);
         setIsAdminAuthenticated(false);
+        setAdminSession(null);
       }
       setIsAuthLoading(false);
     });
@@ -500,11 +534,10 @@ export default function App() {
           return;
         }
 
-        // Auto-elevate admin state for current session if role matches or email matches AND email is verified
-        if (data.role === "admin" || (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified)) {
-          setIsAdminAuthenticated(true);
-        } else {
+        // Losing the admin role locks the Admin panel immediately; access is never auto-granted here.
+        if (data.suspended === true || !(data.role === "admin" || (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified))) {
           setIsAdminAuthenticated(false);
+          setAdminSession(null);
         }
       }
     }, (error) => {
@@ -560,106 +593,72 @@ export default function App() {
     return () => unsubscribe();
   }, [currentUser]);
 
-  // Real-time synchronization of Authorized Administrators
+  // Re-verification is required once the server-issued admin session expires.
+  useEffect(() => {
+    if (!adminSession) return;
+    const checkExpiry = () => {
+      if (Date.now() >= adminSession.expiresAt) { setIsAdminAuthenticated(false); setAdminSession(null); }
+    };
+    const timer = window.setInterval(checkExpiry, 1000);
+    window.addEventListener("focus", checkExpiry);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", checkExpiry); };
+  }, [adminSession]);
+
+  const handleAdminVerified = (session: AdminSessionInfo) => {
+    playCelestialSound("success");
+    setAdminSession(session);
+    setIsAdminAuthenticated(true);
+    setActiveTab("admin");
+  };
+
+  const lockAdminPanel = (revoke: boolean) => {
+    if (revoke) void revokeAdminAccess("this").catch((error) => alert(`Panel locked locally, but device revocation failed: ${error instanceof Error ? error.message : "Unknown error"}. Reconnect and revoke the device before leaving a shared browser.`));
+    setIsAdminAuthenticated(false);
+    setAdminSession(null);
+    setActiveTab(currentUser ? "profile" : "dashboard");
+  };
+
+  const [adminDataError, setAdminDataError] = useState("");
+  const [adminRefresh, setAdminRefresh] = useState(0);
+
+  // Privileged data is fetched only through the server's role + PIN-session guard.
   useEffect(() => {
     if (!isAdminAuthenticated) {
       setStaffList([]);
-      return;
-    }
-
-    const usersRef = collection(db, "users");
-    const q = query(usersRef, where("role", "==", "admin"));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list: any[] = [];
-      snapshot.forEach((doc) => {
-        list.push({ uid: doc.id, ...doc.data() });
-      });
-      // Ensure kertisjohnson7@gmail.com is represented even if profile is not fully created yet, keeping it robust
-      if (list.length === 0 || !list.some(u => u.email === "kertisjohnson7@gmail.com")) {
-        list.unshift({
-          uid: "bootstrap-admin",
-          email: "kertisjohnson7@gmail.com",
-          displayName: "Primary Administrator (Bootstrap)",
-          role: "admin",
-          gemBalance: "Infinite",
-          cloutPoints: "Infinite"
-        });
-      }
-      setStaffList(list);
-    }, (error) => {
-      console.error("Failed to sync staff role roster:", error);
-    });
-
-    return () => unsubscribe();
-  }, [isAdminAuthenticated]);
-
-  // Real-time synchronization of users granted Tarot Reader permission
-  useEffect(() => {
-    if (!isAdminAuthenticated) {
       setTarotReaderList([]);
-      return;
-    }
-    const q = query(collection(db, "users"), where("tarotReader", "==", true));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setTarotReaderList(snapshot.docs.map((d) => ({ uid: d.id, ...d.data() })));
-    }, (error) => {
-      console.error("Failed to sync Tarot Reader roster:", error);
-    });
-    return () => unsubscribe();
-  }, [isAdminAuthenticated]);
-
-  // Real-time member roster (Admin only; Firestore rules restrict listing all profiles to admins)
-  useEffect(() => {
-    if (!isAdminAuthenticated) {
       setMemberList([]);
       setSelectedMemberId(null);
-      return;
-    }
-    const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
-      setMemberList(snapshot.docs.map((d) => ({ uid: d.id, ...d.data() })));
-    }, (error) => {
-      console.error("Failed to sync member roster:", error);
-    });
-    return () => unsubscribe();
-  }, [isAdminAuthenticated]);
-
-  // Real-time synchronization of Financial Performance stats & Reconciliation Records
-  useEffect(() => {
-    if (!isAdminAuthenticated) {
       setFinancialRecords([]);
+      setFinancialStats({});
       return;
     }
-
-    // 1. Sync financial stats singleton doc
-    const statsDocRef = doc(db, "admin_settings", "financials");
-    const unsubStats = onSnapshot(statsDocRef, (snap) => {
-      if (snap.exists()) {
-        setFinancialStats(snap.data());
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const data = await loadAdminPanel();
+        if (cancelled) return;
+        setMemberList(data.members);
+        setStaffList(data.members.filter((member) => member.role === "admin"));
+        setTarotReaderList(data.members.filter((member) => member.tarotReader === true));
+        setFinancialStats(data.financials ?? {});
+        setFinancialRecords(data.records);
+        setAdminDataError("");
+      } catch (error) {
+        if (cancelled) return;
+        setAdminDataError(error instanceof Error ? error.message : "Could not load admin data.");
+        setMemberList([]); setStaffList([]); setTarotReaderList([]); setFinancialRecords([]); setFinancialStats({});
       }
-    }, (error) => {
-      console.error("Failed to sync financial settings document:", error);
-    });
-
-    // 2. Sync financial records ledger
-    const recordsRef = collection(db, "financial_records");
-    const q = query(recordsRef, orderBy("createdAt", "desc"), limit(50));
-    
-    const unsubRecords = onSnapshot(q, (snapshot) => {
-      const list: any[] = [];
-      snapshot.forEach((doc) => {
-        list.push({ id: doc.id, ...doc.data() });
-      });
-      setFinancialRecords(list);
-    }, (error) => {
-      console.error("Failed to sync financial auditing records:", error);
-    });
-
-    return () => {
-      unsubStats();
-      unsubRecords();
     };
-  }, [isAdminAuthenticated]);
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [isAdminAuthenticated, adminRefresh]);
+
+  useEffect(() => {
+    const lock = () => { setIsAdminAuthenticated(false); setAdminSession(null); };
+    window.addEventListener("admin-access-invalid", lock);
+    return () => window.removeEventListener("admin-access-invalid", lock);
+  }, []);
 
   // Live Stream Chat Simulation Loop
   useEffect(() => {
@@ -755,7 +754,7 @@ export default function App() {
     }
   };
 
-  const handleSaveProfile = async (displayName: string, photo: File | null): Promise<boolean> => {
+  const handleSaveProfile = async (displayName: string, bio: string, spiritualInterests: string, photo: File | null): Promise<boolean> => {
     if (!currentUser) {
       setProfileSaveError("Sign in again before saving your profile.");
       return false;
@@ -780,6 +779,8 @@ export default function App() {
 
       await withTimeout(updateDoc(doc(db, "users", currentUser.uid), {
         displayName,
+        bio,
+        spiritualInterests,
         ...((uploadedAvatarUrl || currentAvatarUrl) ? { avatarUrl: uploadedAvatarUrl || currentAvatarUrl } : {}),
         updatedAt: new Date().toISOString()
       }), "Saving your profile");
@@ -803,6 +804,19 @@ export default function App() {
     return true;
   };
 
+  useEffect(() => { if (activeTab !== "profile") setOwnProfilePreview(null); }, [activeTab]);
+
+  const handlePreviewOwnProfile = async () => {
+    if (!currentUser) return;
+    setMemberProfileError("");
+    try {
+      setOwnProfilePreview(await loadPublicMemberProfile(currentUser.uid, true));
+    } catch (error) {
+      console.error("Failed to load public profile preview:", error);
+      setMemberProfileError("Unable to load your public profile preview. Please try again.");
+    }
+  };
+
   const handleViewMemberProfile = async (uid: string) => {
     setMemberProfileError("");
     if (uid === currentUser?.uid) {
@@ -812,22 +826,17 @@ export default function App() {
     }
 
     try {
-      const profileSnapshot = await getDoc(doc(db, "users", uid));
-      if (!profileSnapshot.exists()) {
-        setMemberProfileError("That member profile is no longer available.");
-        return;
-      }
-      setIsLunaProfilePreview(false);
-      setSelectedMemberProfile({ uid: profileSnapshot.id, ...profileSnapshot.data() });
+      setSelectedMemberProfile(await loadPublicMemberProfile(uid));
     } catch (error) {
       console.error("Failed to load member profile:", error);
-      setMemberProfileError("Unable to load that member profile. Please try again.");
+      setMemberProfileError(error instanceof Error && error.message ? error.message : "Unable to load that member profile. Please try again.");
     }
   };
 
   const handleSignOut = async () => {
     try {
       playCelestialSound("flip");
+      await revokeAdminAccess("this").catch((error) => alert(`Could not revoke the remembered Admin device: ${error instanceof Error ? error.message : "Unknown error"}. Revoke it from Admin Security when connected.`));
       await signOut(auth);
       setAuthSuccessMsg("Signed out from the Sanctuary.");
     } catch (err: any) {
@@ -975,6 +984,15 @@ export default function App() {
   // --- NUMEROLOGY CALCULATOR ---
   const handleCalculateNumerology = (e: React.FormEvent) => {
     e.preventDefault();
+    let result: number;
+    try {
+      result = calculateLifePath(Number(dobYear), Number(dobMonth), Number(dobDay));
+    } catch (error) {
+      setCalcStatus("idle");
+      setLifePathNumber(null);
+      setCalcMessage(error instanceof Error ? error.message : "Invalid birth date.");
+      return;
+    }
     setCalcStatus("calculating");
     setLifePathNumber(null);
 
@@ -996,32 +1014,7 @@ export default function App() {
       } else {
         clearInterval(interval);
         
-        // Calculate Life Path Number
-        // Sum Month + Day + Year
-        const mDigits = dobMonth.split("").map(Number);
-        const dDigits = dobDay.split("").map(Number);
-        const yDigits = dobYear.split("").map(Number);
-        const allDigits = [...mDigits, ...dDigits, ...yDigits];
-        
-        const sumDigits = (nums: number[]): number => {
-          return nums.reduce((acc, curr) => acc + curr, 0);
-        };
-
-        let initialSum = sumDigits(allDigits);
-        
-        // Keep reducing unless it's a Master Number: 11, 22
-        const reduceToSingleDigit = (num: number): number => {
-          if (num === 11 || num === 22) return num;
-          if (num < 10) return num;
-          const digits = num.toString().split("").map(Number);
-          return reduceToSingleDigit(sumDigits(digits));
-        };
-
-        const result = reduceToSingleDigit(initialSum);
-        // Fallback safety (if it gets weird or 33, force standard profile range)
-        const finalNumber = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 22].includes(result) ? result : 7;
-
-        setLifePathNumber(finalNumber);
+        setLifePathNumber(result);
         setCalcStatus("done");
         playCelestialSound("success");
       }
@@ -1218,27 +1211,6 @@ export default function App() {
     }
   };
 
-  // Securely trigger Stripe Connect Express onboarding link
-  const handleConnectStripe = async () => {
-    if (!currentUser) return;
-    try {
-      playCelestialSound("success");
-      const res = await fetch("/api/create-connect-onboarding", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUser.uid })
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert("Connect onboarding link failed.");
-      }
-    } catch (err) {
-      console.error("Stripe Connect error:", err);
-    }
-  };
-
   // Securely promote a registered email-verified user to Administrator in Cloud Firestore
   const handlePromoteStaff = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1248,35 +1220,14 @@ export default function App() {
       playCelestialSound("success");
       const targetEmail = staffEmailInput.trim().toLowerCase();
       
-      // Query users collection for this email
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", targetEmail));
-      const querySnapshot = await getDocs(q);
-
-      if (querySnapshot.empty) {
-        alert(`No registered Celestial profile found for email coordinate: "${targetEmail}". Please ensure your wife registers her account and coordinates first.`);
-        return;
-      }
-
-      const userDoc = querySnapshot.docs[0];
-      const userData = userDoc.data();
-
-      if (userData.role === "admin") {
-        alert(`"${targetEmail}" is already authorized as a Celestial Architect (Admin).`);
-        return;
-      }
-
-      // Promote in Firestore
-      await updateDoc(doc(db, "users", userDoc.id), {
-        role: "admin",
-        updatedAt: new Date().toISOString()
-      });
+      await adminMemberAction("promote", { email: targetEmail });
+      setAdminRefresh((value) => value + 1);
 
       alert(`Success! "${targetEmail}" has been granted administrator privileges in the Firestore database. They will receive access upon email verification.`);
       setStaffEmailInput("");
     } catch (error) {
       console.error("Failed to promote staff:", error);
-      alert("Spiritual permission denied: Only authorized administrators can promote users.");
+      alert(error instanceof Error ? error.message : "Could not promote the member.");
     }
   };
 
@@ -1290,14 +1241,12 @@ export default function App() {
     if (confirm(`Are you sure you want to revoke administrator privileges for "${email}"?`)) {
       try {
         playCelestialSound("flip");
-        await updateDoc(doc(db, "users", uid), {
-          role: "member",
-          updatedAt: new Date().toISOString()
-        });
+        await adminMemberAction("demote", { uid });
+        setAdminRefresh((value) => value + 1);
         alert(`Success! "${email}" has been demoted to a standard member in the Firestore database.`);
       } catch (error) {
         console.error("Failed to demote staff:", error);
-        alert("Permission Denied: Only authorized administrators can alter user roles.");
+        alert(error instanceof Error ? error.message : "Could not change the member role.");
       }
     }
   };
@@ -1306,22 +1255,12 @@ export default function App() {
   const handleSetTarotReader = async (e: React.FormEvent | null, target: { uid?: string; email: string }, enabled: boolean) => {
     e?.preventDefault();
     try {
-      let uid = target.uid;
-      if (!uid) {
-        const email = target.email.trim().toLowerCase();
-        if (!email) return;
-        const snap = await getDocs(query(collection(db, "users"), where("email", "==", email)));
-        if (snap.empty) {
-          alert(`No registered profile found for "${email}".`);
-          return;
-        }
-        uid = snap.docs[0].id;
-      }
-      await updateDoc(doc(db, "users", uid), { tarotReader: enabled, updatedAt: new Date().toISOString() });
+      await adminMemberAction("tarotReader", target, enabled);
+      setAdminRefresh((value) => value + 1);
       if (!target.uid) setTarotReaderEmailInput("");
     } catch (error) {
       console.error("Failed to update Tarot Reader permission:", error);
-      alert("Permission Denied: Only authorized administrators can change Tarot Reader access.");
+      alert(error instanceof Error ? error.message : "Could not change Tarot Reader access.");
     }
   };
 
@@ -1334,10 +1273,11 @@ export default function App() {
     const label = member.displayName || member.email;
     if (suspended && !confirm(`Suspend "${label}"? They will be signed out and blocked from account actions.`)) return;
     try {
-      await updateDoc(doc(db, "users", member.uid), { suspended, updatedAt: new Date().toISOString() });
+      await adminMemberAction("suspend", { uid: member.uid }, suspended);
+      setAdminRefresh((value) => value + 1);
     } catch (error) {
       console.error("Failed to update suspension:", error);
-      alert("Permission Denied: Only authorized administrators can suspend accounts.");
+      alert(error instanceof Error ? error.message : "Could not change suspension.");
     }
   };
 
@@ -1514,7 +1454,7 @@ export default function App() {
 
   return (
     <>
-    <div className="h-[100dvh] overflow-hidden bg-[#070412] text-slate-100 flex flex-col items-center relative">
+    <div className={`${activeTab === "profile" ? "min-h-[100dvh] overflow-x-clip" : "h-[100dvh] overflow-hidden"} bg-[#070412] text-slate-100 flex flex-col items-center relative`}>
       {/* Wide-screen sanctuary scenery (hidden on phones) */}
       <div aria-hidden="true" className="hidden md:block absolute inset-0 pointer-events-none overflow-hidden">
         <div
@@ -1524,17 +1464,17 @@ export default function App() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#070412]/70 via-transparent to-[#070412]/70" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#070412]/40 via-transparent to-[#070412]/70" />
         <div
-          className="hidden lg:block absolute top-1/2 left-[4%] xl:left-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 -rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          className="hidden 2xl:block absolute top-1/2 left-[2%] w-[9vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 -rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
           style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
         />
         <div
-          className="hidden lg:block absolute top-1/2 right-[4%] xl:right-[8%] w-[14vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
+          className="hidden 2xl:block absolute top-1/2 right-[2%] w-[9vw] max-w-[220px] aspect-[3/4] -translate-y-1/2 rotate-6 rounded-2xl bg-cover bg-center shadow-[0_0_60px_rgba(243,198,95,0.25)] border border-mystic-gold/40 opacity-90"
           style={{ backgroundImage: `url(${CARD_BACK_IMG})` }}
         />
       </div>
 
       {/* Outer Widescreen/Desktop Container Wrapper with moving nebula & starfield background */}
-      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 overflow-hidden ${activeTab === "live" ? "h-[100dvh] min-h-0 max-w-none pb-16" : "max-w-md h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
+      <div className={`w-full cosmic-nebula-bg shadow-2xl flex flex-col relative z-10 ${activeTab === "profile" ? "min-h-[100dvh] max-w-md md:max-w-3xl lg:max-w-5xl 2xl:max-w-6xl border-x border-[#1a1133] pb-[calc(5rem+env(safe-area-inset-bottom))]" : activeTab === "live" || activeTab === "community" ? "overflow-hidden h-[100dvh] min-h-0 max-w-none pb-16" : "overflow-hidden max-w-md md:max-w-3xl lg:max-w-5xl 2xl:max-w-6xl h-[100dvh] min-h-0 border-x border-[#1a1133] pb-20"}`}>
         
         {/* Phone-only scenery inside the app column, beneath all content */}
         {activeTab !== "live" && (
@@ -1555,12 +1495,6 @@ export default function App() {
           <div className="absolute top-[60%] right-10 w-20 h-20 cosmic-glowing-orb-gold animate-float-orb-gold pointer-events-none" style={{ animationDelay: "-4s" }} />
           <div className="absolute top-[80%] -left-12 w-36 h-36 cosmic-glowing-orb-purple animate-float-orb-purple pointer-events-none" style={{ animationDelay: "-8s" }} />
         </>}
-
-        {activeTab !== "tarot" && activeTab !== "live" && (
-          <div className="absolute top-4 right-4 z-10 w-16 h-16 sm:w-20 sm:h-20 drop-shadow-[0_0_10px_rgba(200,162,200,0.5)]">
-            <img src="/src/assets/images/mascot.jpeg" alt="Luna's Little Guardian" className="w-full h-full object-contain" />
-          </div>
-        )}
 
         {/* Shooting Stars */}
         <div className="absolute top-20 right-10 w-[2px] h-[2px] bg-white rounded-full shooting-star-1 pointer-events-none opacity-40 shadow-[0_0_8px_#fff]" />
@@ -1635,7 +1569,7 @@ export default function App() {
         </header>}
 
         {/* Main Content View Switcher */}
-        <main className={`flex-1 min-h-0 z-10 overflow-y-auto ${activeTab === "live" ? "px-0 py-0" : "px-4 py-4"}`}>
+        <main className={`${activeTab === "profile" ? "flex-none overflow-visible" : "flex-1 min-h-0 overflow-y-auto"} z-10 ${activeTab === "live" ? "px-0 py-0" : activeTab === "community" ? "px-4 py-5 sm:px-6 lg:px-8" : "px-4 py-4 md:px-6 md:py-5 lg:px-8"}`}>
 
 
           {!isAuthLoading && !currentUser && !hasSkippedAuth && activeTab !== "dashboard" ? (
@@ -2014,17 +1948,17 @@ export default function App() {
                   </div>
 
                   {/* THREE CARDS LAYOUT */}
-                  <div className="grid grid-cols-3 gap-2 py-4">
+                  <div className="mx-auto grid w-full max-w-2xl grid-cols-3 justify-items-center gap-2 py-4 sm:gap-4 md:gap-6">
                     {drawnCards.map((item, index) => {
                       const positionLabel = index === 0 ? "Past" : index === 1 ? "Present" : "Future";
                       return (
-                        <div key={index} className="flex flex-col items-center space-y-2">
+                        <div key={index} className="flex w-full flex-col items-center space-y-2">
                           <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold font-display">
                             {positionLabel}
                           </span>
 
                           {/* Interactive Card Container */}
-                          <div className="perspective-1000 w-full aspect-[2/3] max-h-56">
+                          <div className="perspective-1000 mx-auto w-full max-w-[11rem] aspect-[2/3]">
                             <div
                               onClick={() => handleFlipCard(index)}
                               className={`w-full h-full duration-700 transform-style-3d cursor-pointer relative ${
@@ -2099,7 +2033,7 @@ export default function App() {
                   </div>
 
                   {/* INTERPRETATIONS SECTION (Visible dynamically as they are flipped) */}
-                  <div className="space-y-4">
+                  <div className="mx-auto w-full max-w-2xl space-y-4">
                     {drawnCards.some((c) => c.isFlipped) && (
                       <h3 className="font-display text-xs tracking-widest text-slate-400 uppercase font-bold pl-1">
                         Drawn Interpretations
@@ -2458,7 +2392,7 @@ export default function App() {
                       className="w-full bg-[#0b081c] border border-[#2c1654] rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-mystic-gold"
                     >
                       {Array.from({ length: 80 }, (_, i) => {
-                        const y = (2026 - i).toString();
+                        const y = (new Date().getFullYear() - i).toString();
                         return <option key={y} value={y}>{y}</option>;
                       })}
                     </select>
@@ -2474,6 +2408,7 @@ export default function App() {
               </form>
 
               {/* CALCULATION FEEDBACK SHIMMER */}
+              {calcStatus === "idle" && calcMessage && <p role="alert" className="rounded-xl border border-red-400/40 p-3 text-xs text-red-300">{calcMessage}</p>}
               {calcStatus === "calculating" && (
                 <div className="p-6 rounded-2xl bg-black/40 border border-[#2c1654] text-center space-y-3">
                   <div className="relative w-12 h-12 mx-auto">
@@ -2573,14 +2508,26 @@ export default function App() {
               onViewMemberProfile={handleViewMemberProfile}
             />
           )}
-          {activeTab === "live" && selectedMemberProfile && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-              <div className="w-full max-w-md">
+          {activeTab === "community" && <CommunityBoard onSignIn={() => setActiveTab("dashboard")} onViewProfile={handleViewMemberProfile} />}
+          {activeTab === "scheduling" && <Scheduling onSignIn={() => setActiveTab("dashboard")} isAdmin={isAdminAccount} onViewProfile={handleViewMemberProfile} />}
+          {activeTab === "connections" && (currentUser && !currentUser.isAnonymous ? (
+            <Connections uid={currentUser.uid} onViewProfile={handleViewMemberProfile} />
+          ) : (
+            <section className="mx-auto max-w-xl rounded-2xl border border-mystic-gold/40 bg-[#100a20]/90 px-5 py-10 text-center">
+              <h2 className="font-display text-xl text-white">Connections</h2>
+              <p className="mt-2 text-sm text-slate-400">Sign in with a member account to find members and manage connections.</p>
+              <button type="button" onClick={() => setActiveTab("dashboard")} className="mt-4 min-h-11 rounded-lg bg-mystic-gold px-4 text-sm font-bold text-[#0b081c]">Sign in</button>
+            </section>
+          ))}
+          {(activeTab === "groupChats" || activeTab === "teams") && <ToolComingSoon toolId={activeTab} onOpenCommunity={() => setActiveTab("community")} />}
+          {(activeTab === "live" || activeTab === "community" || activeTab === "connections" || activeTab === "scheduling") && selectedMemberProfile && createPortal(
+            <div role="dialog" aria-modal="true" aria-label="Member profile" className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
+              <div className="my-auto max-h-[calc(100dvh-1rem)] w-full max-w-md min-w-0 overflow-y-auto overscroll-contain sm:max-h-[calc(100dvh-2rem)]">
                 <MemberProfile member={selectedMemberProfile} onClose={() => setSelectedMemberProfile(null)} />
               </div>
-            </div>
+            </div>, document.body
           )}
-          {activeTab === "live" && memberProfileError && (
+          {(activeTab === "live" || activeTab === "community" || activeTab === "connections" || activeTab === "scheduling") && memberProfileError && (
             <div role="alert" className="fixed inset-x-4 top-6 z-[101] mx-auto max-w-md rounded-lg border border-red-400/30 bg-red-950/90 px-3 py-2 text-center text-xs text-red-200 shadow-xl">
               {memberProfileError}
               <button type="button" onClick={() => setMemberProfileError("")} className="ml-2 font-semibold underline">Close</button>
@@ -3142,34 +3089,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Stripe Connect Onboarding (Only visible to Hosts/Admins) */}
-                  {(dbUserDoc?.role === "admin" || currentUser.email === "kertisjohnson7@gmail.com") && (
-                    <div className="border-t border-[#2c1654]/40 pt-3 space-y-2 text-left">
-                      <span className="text-[9px] font-mono tracking-widest text-teal-400 uppercase block">
-                        Stripe Connect Host Wallet (Transfer Share)
-                      </span>
-                      <p className="text-[10px] text-slate-400 leading-normal">
-                        Onboard with Stripe Connect to securely link your bank account or card. This enables recipient transfers for receiving 80% of audience cash tips.
-                      </p>
-                      
-                      <div className="flex items-center justify-between p-3 rounded-lg bg-teal-950/20 border border-teal-500/20">
-                        <div className="space-y-0.5">
-                          <span className="text-xs font-bold text-white block">Stripe Connect Status:</span>
-                          <span className="text-[9px] font-mono text-teal-300 uppercase font-semibold">
-                            {dbUserDoc?.stripeConnectId ? "Onboarded (Active)" : "Not Onboarded"}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleConnectStripe}
-                          className="py-1.5 px-3 rounded bg-teal-400 text-black font-bold text-[10px] uppercase hover:brightness-110 active:scale-95 transition-all"
-                        >
-                          {dbUserDoc?.stripeConnectId ? "Go to Dashboard" : "Setup Connect Link"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
                 </div>
               )}
 
@@ -3219,51 +3138,62 @@ export default function App() {
                 </>
               )}
 
-              {/* Quiet, unboxed Staff Entrance Access Gate */}
-              <div className="pt-6 pb-2 text-center border-t border-[#2c1654]/20">
-                <button
-                  type="button"
-                  onClick={() => {
-                    playCelestialSound("flip");
-                    setAdminPasscodeInput("");
-                    setAdminGateError("");
-                    setShowAdminGate(true);
-                  }}
-                  className="text-[10px] text-slate-500 hover:text-mystic-gold transition-colors font-medium hover:underline cursor-pointer bg-transparent border-0"
-                >
-                  Reader Access Gate (Staff Only)
-                </button>
-              </div>
-
             </div>
           )}
 
-          {activeTab === "profile" && currentUser && (
+          {activeTab === "profile" && currentUser && ownProfilePreview && (
+            <div className="space-y-3">
+              <p role="status" className="rounded-lg border border-mystic-gold/30 bg-black/30 px-3 py-2 text-center text-xs text-slate-300">Preview: this is what other members see.</p>
+              <MemberProfile member={ownProfilePreview} />
+              <button type="button" onClick={() => setOwnProfilePreview(null)} className="mx-auto block min-h-10 rounded-lg border border-mystic-gold/50 px-5 py-2 text-xs font-semibold text-mystic-gold">Back to My Profile</button>
+            </div>
+          )}
+
+          {activeTab === "profile" && memberProfileError && (
+            <p role="alert" className="mb-3 rounded-lg border border-red-400/30 bg-red-950/30 px-3 py-2 text-center text-xs text-red-300">{memberProfileError}</p>
+          )}
+
+          {activeTab === "profile" && currentUser && !ownProfilePreview && (
             <MyProfile
               identity={{
                 uid: currentUser.uid,
                 displayName: dbUserDoc?.displayName || currentUser.displayName || currentUser.email?.split("@")[0] || "Celestial Member",
                 avatarUrl: dbUserDoc?.avatarUrl || currentUser.photoURL || null
               } satisfies UserIdentity}
-              email={currentUser.email || ""}
+              bio={typeof dbUserDoc?.bio === "string" ? dbUserDoc.bio : ""}
+              spiritualInterests={typeof dbUserDoc?.spiritualInterests === "string" ? dbUserDoc.spiritualInterests : ""}
               gemBalance={typeof dbUserDoc?.gemBalance === "number" ? dbUserDoc.gemBalance : 0}
               isSaving={isProfileSaving}
               saveError={profileSaveError}
               saveMessage={profileSaveMessage}
               onSave={handleSaveProfile}
+              onBuyGems={handleBuyGems}
+              canReceivePayouts={!currentUser.isAnonymous}
+              returnedFromStripe={connectReturn}
+              onPreviewPublicProfile={() => void handlePreviewOwnProfile()}
+              onOpenAdminAccess={isAdminAccount ? () => { playCelestialSound("flip"); setActiveTab(isAdminAuthenticated ? "admin" : "adminAccess"); } : undefined}
             />
           )}
 
+          {activeTab === "affirmation" && <DailyAffirmation />}
+
+          {(activeTab === "adminAccess" || (activeTab === "admin" && !isAdminAuthenticated)) && (
+            isAdminAccount ? (
+              <AdminAccessGate onVerified={handleAdminVerified} onCancel={() => { playCelestialSound("flip"); setActiveTab(currentUser ? "profile" : "dashboard"); }} />
+            ) : (
+              <p role="alert" className="mx-auto mt-10 max-w-sm rounded-lg border border-red-400/30 bg-red-950/30 px-4 py-3 text-center text-xs text-red-300">Admin Access is available only to the authorized administrator account.</p>
+            )
+          )}
+
           {/* ==================== 7. DEDICATED ADMIN CONSOLE VIEW ==================== */}
-          {activeTab === "admin" && (
+          {activeTab === "admin" && isAdminAuthenticated && (
             <div className="space-y-6 fade-in text-left">
-              {(selectedMemberProfile || isLunaProfilePreview) && (
+              {adminDataError && <p role="alert" className="rounded-lg border border-red-400/40 p-3 text-xs text-red-300">{adminDataError}</p>}
+              {selectedMemberProfile && (
                 <MemberProfile
                   member={selectedMemberProfile}
-                  previewLuna={isLunaProfilePreview}
                   onClose={() => {
                     setSelectedMemberProfile(null);
-                    setIsLunaProfilePreview(false);
                   }}
                 />
               )}
@@ -3281,25 +3211,11 @@ export default function App() {
                   </div>
                 </div>
 
-                {import.meta.env.DEV && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedMemberProfile(null);
-                      setIsLunaProfilePreview(true);
-                    }}
-                    className="rounded border border-dashed border-teal-300/50 bg-teal-950/20 px-2.5 py-1.5 text-[10px] font-bold tracking-wider text-teal-200 transition hover:border-mystic-gold/60 hover:text-mystic-gold"
-                  >
-                    PREVIEW LUNA
-                  </button>
-                )}
-
                 <button
                   type="button"
                   onClick={() => {
                     playCelestialSound("flip");
-                    setIsAdminAuthenticated(false);
-                    setActiveTab("dashboard");
+                    lockAdminPanel(true);
                   }}
                   className="text-[10px] text-red-400 border border-red-400/40 px-2.5 py-1 rounded bg-red-400/10 hover:bg-red-400/20 active:scale-95 transition-all cursor-pointer font-bold"
                 >
@@ -3319,7 +3235,7 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed font-body">
-                  <strong>Secure Architecture Verified:</strong> Administrative operations are fully secured. Credentials, roles, and administrative mutations are protected server-side via <code className="text-teal-300 bg-teal-950/40 px-1 py-0.5 rounded text-[10px]">Firestore Security Rules</code> and verified Firebase Authentication email sessions. Ordinary members are restricted from self-assigning roles or modifying master configurations.
+                  Member management and financial data require a server-verified Admin PIN session. Deploy the accompanying Firestore rules before release to block direct-client bypasses. Deck edits, shuffle settings and broadcast simulations below apply only to this browser; they do not publish global changes or create financial records.
                 </p>
               </div>
 
@@ -3380,7 +3296,33 @@ export default function App() {
                 >
                   Financials
                 </button>
+                <button
+                  type="button"
+                  onClick={() => { playCelestialSound("flip"); setAdminSubTab("images"); }}
+                  className={`flex-1 py-2 text-center text-xs font-semibold tracking-wide transition-all border-b-2 ${
+                    adminSubTab === "images"
+                      ? "border-mystic-gold text-mystic-gold"
+                      : "border-transparent text-slate-450 hover:text-white"
+                  }`}
+                >
+                  Images
+                </button>
+                <button
+                  onClick={() => { playCelestialSound("flip"); setAdminSubTab("security"); }}
+                  className={`flex-1 py-2 text-center text-xs font-semibold tracking-wide transition-all border-b-2 ${
+                    adminSubTab === "security"
+                      ? "border-mystic-gold text-mystic-gold"
+                      : "border-transparent text-slate-450 hover:text-white"
+                  }`}
+                >
+                  Security
+                </button>
               </div>
+
+              {adminSubTab === "images" && <AdminImageControls />}
+              {adminSubTab === "security" && (
+                <AdminSecurityPanel session={adminSession} onSessionChanged={setAdminSession} onRevoked={() => lockAdminPanel(false)} />
+              )}
 
               {/* SUBTAB 1: LIVE BROADCAST CONTROLS */}
               {adminSubTab === "broadcast" && (
@@ -3392,7 +3334,7 @@ export default function App() {
                       </span>
                       <div className="flex items-center gap-1.5">
                         <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                        <span className="text-[10px] text-emerald-400 font-bold uppercase font-mono">Live & Connected</span>
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase font-mono">Local simulation</span>
                       </div>
                     </div>
                     <h3 className="text-xs text-slate-300 font-body">
@@ -3517,11 +3459,11 @@ export default function App() {
                   {/* Client waiting list */}
                   <div className="space-y-2 text-left">
                     <span className="text-[9px] font-mono text-slate-400 uppercase block pl-1 font-semibold">
-                      Active Telepathy waiting Queue
+                      Telepathy waiting queue (not connected)
                     </span>
 
                     <div className="py-6 text-center text-[11px] text-slate-500 border border-dashed border-[#2c1654]/40 rounded-lg italic">
-                      No clients waiting — no records yet.
+                      This preview is not connected to a client queue.
                     </div>
                   </div>
                 </div>
@@ -4232,7 +4174,7 @@ export default function App() {
                       <div className="absolute top-2 right-2 opacity-10">
                         <TrendingUp className="w-8 h-8 text-purple-400" />
                       </div>
-                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Connect Payouts (80%)</span>
+                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Broadcaster Transfers (80%)</span>
                       <strong className="text-lg font-bold text-purple-300 tabular-nums">
                         ${(financialStats?.totalTransfers ?? 0).toFixed(2)}
                       </strong>
@@ -4389,105 +4331,12 @@ export default function App() {
         </main>
 
 
-        {/* --- ADMIN ACCESS GATE PASSCODE MODAL --- */}
-        {showAdminGate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-            <div className="w-full max-w-xs bg-gradient-to-b from-[#1c103a] to-[#070412] border-2 border-mystic-gold rounded-2xl p-6 text-center space-y-4 shadow-2xl relative">
-              <div className="absolute top-3 right-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    playCelestialSound("flip");
-                    setShowAdminGate(false);
-                  }}
-                  className="text-slate-400 hover:text-white text-xs font-semibold px-2 py-0.5 rounded border border-[#2c1654]/60 bg-[#070412] cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="w-12 h-12 rounded-full bg-mystic-gold/15 border border-mystic-gold/40 flex items-center justify-center mx-auto text-mystic-gold text-lg">
-                <Lock className="w-5 h-5 animate-pulse" />
-              </div>
-
-              <div>
-                <h3 className="font-display text-sm font-bold text-white tracking-wide">
-                  Reader's Cosmic Portal
-                </h3>
-                <p className="text-[10px] text-slate-400 mt-1 leading-normal">
-                  Enter the mystical passcode to verify administrator authority.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  value={adminPasscodeInput}
-                  onChange={(e) => {
-                    setAdminPasscodeInput(e.target.value);
-                    setAdminGateError("");
-                  }}
-                  placeholder="Enter Passcode"
-                  className="w-full bg-[#070412] border border-[#2c1654] rounded-lg px-3 py-2 text-xs text-center text-slate-100 outline-none focus:border-mystic-gold"
-                  autoFocus
-                />
-
-                {adminGateError && (
-                  <p className="text-[10px] text-red-400 font-medium">
-                    {adminGateError}
-                  </p>
-                )}
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (currentUser && (currentUser.email === "kertisjohnson7@gmail.com" || dbUserDoc?.role === "admin")) {
-                      if (!currentUser.emailVerified) {
-                        setAdminGateError("Your administrator email coordinate is unverified. Please verify your email on the Member tab first.");
-                        return;
-                      }
-                      playCelestialSound("success");
-                      setIsAdminAuthenticated(true);
-                      setActiveTab("admin");
-                      setShowAdminGate(false);
-                    } else {
-                      playCelestialSound("flip");
-                      setAdminGateError("Vibrational match failed. Only verified, authorized administrator accounts can access this portal.");
-                    }
-                  }}
-                  className="flex-1 py-2 rounded-lg bg-mystic-gold text-[#070412] font-bold text-xs uppercase cursor-pointer"
-                >
-                  Verify Key
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    playCelestialSound("flip");
-                    setShowAdminGate(false);
-                  }}
-                  className="px-3 py-2 rounded-lg border border-[#2c1654] text-slate-300 text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-
-              <p className="text-[8px] text-slate-500 italic">
-                Secure Portal Access: Log in as <strong className="text-mystic-gold">kertisjohnson7@gmail.com</strong> or another promoted verified admin account.
-              </p>
-            </div>
-          </div>
-        )}
-
       </div>
 
     </div>
 
       {/* --- STICKY BOTTOM TAB NAVIGATION (Pattern 1 Touch-First Contract) --- */}
-        <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center ${
-          isAdminAuthenticated ? "grid-cols-7" : "grid-cols-6"
-        }`}>
+        <nav className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full ${activeTab === "live" || activeTab === "community" ? "max-w-none" : "max-w-md md:max-w-3xl lg:max-w-5xl 2xl:max-w-6xl"} h-16 bg-[#070412]/95 backdrop-blur-md border-t border-[#2c1654]/60 z-40 grid items-center grid-cols-9`}>
           
           <button
             onClick={() => { setActiveTab("home"); playCelestialSound("flip"); }}
@@ -4542,6 +4391,29 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => { setActiveTab("community"); playCelestialSound("flip"); }}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "community" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <UsersRound className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Community</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setIsToolsMenuOpen(true); playCelestialSound("flip"); }}
+            aria-label="Celestial Tools"
+            aria-haspopup="dialog"
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              isToolsMenuOpen || CELESTIAL_TOOLS.some((tool) => tool.id === activeTab) ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <img src="/celestial-owl.png" alt="" aria-hidden="true" className={`h-6 w-6 rounded-full object-cover [object-position:49%_50%] ${isToolsMenuOpen || CELESTIAL_TOOLS.some((tool) => tool.id === activeTab) ? "ring-1 ring-mystic-gold" : ""}`} />
+            <span className="text-[8px] font-semibold leading-[9px] tracking-tight mt-0.5 text-center">Celestial<br />Tools</span>
+          </button>
+
+          <button
             onClick={() => {
               playCelestialSound("flip");
               if (isAuthLoading) {
@@ -4558,19 +4430,24 @@ export default function App() {
             <span className="text-[9px] font-semibold tracking-tight mt-1">Member</span>
           </button>
 
-          {isAdminAuthenticated && (
-            <button
-              onClick={() => { setActiveTab("admin"); playCelestialSound("flip"); }}
-              className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
-                activeTab === "admin" ? "text-teal-400" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <TrendingUp className="w-5 h-5" />
-              <span className="text-[9px] font-semibold tracking-tight mt-1">Admin</span>
-            </button>
-          )}
+          <button
+            onClick={() => { setActiveTab("affirmation"); playCelestialSound("flip"); }}
+            aria-label="Daily Affirmation"
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-all cursor-pointer ${
+              activeTab === "affirmation" ? "text-mystic-gold" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Sparkles className="w-5 h-5" />
+            <span className="text-[9px] font-semibold tracking-tight mt-1">Affirm</span>
+          </button>
 
         </nav>
+        {isToolsMenuOpen && (
+          <CelestialToolsMenu
+            onClose={() => setIsToolsMenuOpen(false)}
+            onSelect={(id: CelestialToolId) => { setIsToolsMenuOpen(false); setActiveTab(id); playCelestialSound("flip"); }}
+          />
+        )}
     </>
   );
 }

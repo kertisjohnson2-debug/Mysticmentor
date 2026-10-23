@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import LiveThumbnailPicker from "./LiveThumbnailPicker";
+import DEFAULT_LIVE_THUMBNAIL from "../assets/images/mystical_tarot_reader_1790704974614.jpg";
 import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
 import {
   Activity,
   Anchor,
-  BarChart3,
   BookOpen,
   Check,
   CircleDollarSign,
@@ -40,6 +41,7 @@ import type { LiveVideoStatus } from "../lib/liveVideo";
 import TarotCardArt from "./TarotCardArt";
 import LiveTarotCardDisplayV2 from "./LiveTarotCardDisplayV2";
 import cardBackImage from "../assets/images/mystical_card_back_1790704964638.jpg";
+import type { BroadcasterRankProgress } from "../lib/broadcasterRanks";
 
 type LiveTopic =
   | "Tarot & Spirituality"
@@ -97,7 +99,7 @@ type Props = {
   isBroadcaster: boolean;
   isPaused: boolean;
   canUseTarot: boolean;
-  currentRank: string;
+  broadcasterRank: BroadcasterRankProgress | null;
   elapsedSeconds: number;
   viewerCount: number;
   giftsReceived: number;
@@ -105,10 +107,10 @@ type Props = {
   readingSpread: LiveSpread;
   readingCards: LiveReadingCard[];
   showInterpretations: boolean;
+  isBookDisplay?: boolean;
   onBack: () => void;
   onBrowse: () => void;
   onStartBroadcast: () => void;
-  onEarnings: () => void;
   onEndBroadcast: () => void;
   onTogglePause: () => void;
   onUpdateBroadcastInfo: (title: string, description: string, hashtags: string) => void;
@@ -119,6 +121,7 @@ type Props = {
   onStartReading: () => void;
   onDrawSelectedCards: (cardIds: number[]) => void;
   onFlipLiveCard: (index: number) => void;
+  onBookReadingChange?: (reading: { spread: LiveSpread; cards: LiveReadingCard[] } | null) => void;
   onRevealNext: () => void;
   onRevealAll: () => void;
   onResetReading: () => void;
@@ -133,13 +136,15 @@ type Props = {
   viewerGems: number;
   onSendGift: (gift: LiveGift) => void;
   onSendCashTip: (amount: string) => void;
+  cashTipsEnabled?: boolean;
+  cashTipsMessage?: string;
   customTip: string;
   setCustomTip: Dispatch<SetStateAction<string>>;
   isGiftSheetOpen: boolean;
   setIsGiftSheetOpen: Dispatch<SetStateAction<boolean>>;
 };
 
-function ReadingEntry({ item, position }: { item: LiveReadingCard; position: string }) {
+export function ReadingEntry({ item, position }: { item: LiveReadingCard; position: string }) {
   const { card, isReversed } = item;
   const keywords = isReversed ? card.reversedKeywords : card.uprightKeywords;
   return <article className="rounded-lg border border-white/10 bg-[#100b1a]/70 p-2 backdrop-blur-md">
@@ -161,7 +166,7 @@ export default function ImmersiveLiveRoom({
   isBroadcaster,
   isPaused,
   canUseTarot,
-  currentRank,
+  broadcasterRank,
   elapsedSeconds,
   viewerCount,
   giftsReceived,
@@ -169,10 +174,10 @@ export default function ImmersiveLiveRoom({
   readingSpread,
   readingCards,
   showInterpretations,
+  isBookDisplay = false,
   onBack,
   onBrowse,
   onStartBroadcast,
-  onEarnings,
   onEndBroadcast,
   onTogglePause,
   onUpdateBroadcastInfo,
@@ -183,6 +188,7 @@ export default function ImmersiveLiveRoom({
   onStartReading,
   onDrawSelectedCards,
   onFlipLiveCard,
+  onBookReadingChange,
   onRevealNext,
   onRevealAll,
   onResetReading,
@@ -196,6 +202,8 @@ export default function ImmersiveLiveRoom({
   viewerGems,
   onSendGift,
   onSendCashTip,
+  cashTipsEnabled = false,
+  cashTipsMessage = "",
   customTip,
   setCustomTip,
   isGiftSheetOpen,
@@ -204,8 +212,8 @@ export default function ImmersiveLiveRoom({
   const [isV2Open, setIsV2Open] = useState(false);
   const [isLiveTarotBookOpen, setIsLiveTarotBookOpen] = useState(false);
   const [isBookReadingOpen, setIsBookReadingOpen] = useState(false);
-  const [liveTarotBookSpread, setLiveTarotBookSpread] = useState<LiveSpread>("three");
-  const [liveTarotBookCards, setLiveTarotBookCards] = useState<LiveReadingCard[]>([]);
+  const [bookSpread, setBookSpread] = useState<LiveSpread>("three");
+  const [bookCards, setBookCards] = useState<LiveReadingCard[]>([]);
   const [isReadingControlsOpen, setIsReadingControlsOpen] = useState(false);
   const [isCardPickerOpen, setIsCardPickerOpen] = useState(false);
   const [isBroadcastInfoOpen, setIsBroadcastInfoOpen] = useState(false);
@@ -247,12 +255,26 @@ export default function ImmersiveLiveRoom({
     video.srcObject = videoStream;
     setIsAudioBlocked(false);
     if (!videoStream) return;
-    video.play().catch(() => {
+    let cancelled = false;
+    const onPlaying = () => console.info("[LiveVideo] video playback started", { width: video.videoWidth, height: video.videoHeight });
+    video.addEventListener("playing", onPlaying);
+    video.play().catch((error: unknown) => {
+      if (cancelled) return;
+      const name = error instanceof Error ? error.name : "UnknownError";
+      console.warn("[LiveVideo] video playback rejected", { name });
       // Autoplay with sound can be blocked; fall back to muted playback until the viewer taps
+      if (name !== "NotAllowedError") return;
       video.muted = true;
       setIsAudioBlocked(true);
-      video.play().catch(() => undefined);
+      video.play().catch((retryError: unknown) => {
+        if (!cancelled) console.warn("[LiveVideo] muted video playback failed", { name: retryError instanceof Error ? retryError.name : "UnknownError" });
+      });
     });
+    return () => {
+      cancelled = true;
+      video.removeEventListener("playing", onPlaying);
+      video.srcObject = null;
+    };
   }, [videoStream, hasRealVideo]);
 
   const spreadSize = readingSpread === "single" ? 1 : 3;
@@ -260,15 +282,30 @@ export default function ImmersiveLiveRoom({
   const hasCompleteManualSelection = selectedManualCardIds.length === spreadSize && new Set(selectedManualCardIds).size === spreadSize;
   const revealedReadingCards = readingCards.flatMap((item, index) => item.isRevealed ? [{ item, index }] : []);
   const hasRevealedReading = revealedReadingCards.length > 0;
+  // The broadcaster's book modal keeps its own spread and cards; viewers see the published reading
+  const showTarotBook = isLiveTarotBookOpen || isBookDisplay;
+  const liveTarotBookSpread = isBroadcaster ? bookSpread : readingSpread;
+  const liveTarotBookCards = isBroadcaster ? bookCards : readingCards;
   const openLiveTarotBook = () => {
-    const selectedCards = [...TAROT_DECK.filter((card) => !card.isHidden)]
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 3)
-      .map((card) => ({ card, isReversed: Math.random() > 0.7, isRevealed: false }));
-    setLiveTarotBookCards(selectedCards);
-    setLiveTarotBookSpread("three");
+    if (isBroadcaster) {
+      setBookCards([...TAROT_DECK.filter((card) => !card.isHidden)]
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3)
+        .map((card) => ({ card, isReversed: Math.random() > 0.7, isRevealed: false })));
+      setBookSpread("three");
+    }
     setIsLiveTarotBookOpen(true);
   };
+  const flipBookCard = (index: number) => {
+    if (isBroadcaster) setBookCards((cards) => cards.map((card, cardIndex) => cardIndex === index ? { ...card, isRevealed: true } : card));
+  };
+  // Publishes the modal's active reading to viewers without touching the right-rail's own state
+  useEffect(() => {
+    if (!isBroadcaster || !onBookReadingChange) return;
+    if (!isLiveTarotBookOpen) { onBookReadingChange(null); return; }
+    onBookReadingChange({ spread: bookSpread, cards: bookCards.slice(0, bookSpread === "single" ? 1 : 3) });
+  }, [isBroadcaster, isLiveTarotBookOpen, bookSpread, bookCards]);
+  useEffect(() => () => onBookReadingChange?.(null), []);
 
   useEffect(() => {
     if (!hasRevealedReading) setIsReadingPanelOpen(false);
@@ -309,7 +346,7 @@ export default function ImmersiveLiveRoom({
         )}
       </header>
 
-      <div className={`absolute left-4 ${isBroadcaster ? "right-44 sm:right-44" : "right-[4.75rem] sm:right-24"} ${readingCards.length > 0 ? "max-md:right-[13rem]!" : ""} top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 flex items-center gap-3 sm:left-6`}>
+      <div className={`absolute left-4 ${isBroadcaster ? "right-44 sm:right-44" : "right-[4.75rem] sm:right-24"} ${readingCards.length > 0 ? "max-md:right-[13rem]!" : ""} top-[calc(env(safe-area-inset-top)+6.5rem)] z-10 flex items-center gap-3 sm:left-6`}>
         <button type="button" onClick={() => broadcaster.profileUid && onViewMemberProfile(broadcaster.profileUid)} disabled={!broadcaster.profileUid} aria-label={`View ${broadcaster.name}'s profile`} className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/60 bg-[#25182e]/85 font-display text-xs font-semibold text-mystic-gold shadow-lg backdrop-blur-md transition enabled:hover:border-mystic-gold enabled:active:scale-95 disabled:cursor-default">{broadcaster.avatarUrl ? <img src={broadcaster.avatarUrl} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</button>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
@@ -323,23 +360,42 @@ export default function ImmersiveLiveRoom({
         </div>
       </div>
 
+      <section aria-label="Broadcaster rank and Gem progress" className="pointer-events-none absolute inset-x-0 top-[calc(max(0.75rem,env(safe-area-inset-top))+3.1rem)] z-10 flex justify-center px-[4.75rem] sm:px-24">
+        <div className="w-full max-w-[16rem] space-y-0.5 text-white [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">
+          <div className="flex items-center justify-between gap-2 text-[10px] leading-tight">
+            <span className="truncate font-semibold text-mystic-gold">{broadcasterRank?.currentRank.name ?? "Rank unavailable"}</span>
+            {broadcasterRank && <span className="shrink-0 tabular-nums text-white/85">{formatCount(broadcasterRank.lifetimeGemsReceived)} Gems</span>}
+          </div>
+          <div role="progressbar" aria-label="Progress toward next broadcaster rank" aria-valuemin={0} aria-valuemax={100} aria-valuenow={broadcasterRank ? Math.round(broadcasterRank.rankProgress * 100) : undefined} className="h-1 overflow-hidden rounded-full bg-white/20">
+            <div className="h-full rounded-full bg-mystic-gold transition-[width]" style={{ width: `${(broadcasterRank?.rankProgress ?? 0) * 100}%` }} />
+          </div>
+          <p className="truncate text-center text-[9px] leading-tight text-white/75">
+            {!broadcasterRank
+              ? ""
+              : broadcasterRank.nextRank
+                ? `${Math.round(broadcasterRank.rankProgress * 100)}% · ${formatCount(broadcasterRank.gemsToNextRank)} Gems to ${broadcasterRank.nextRank.name}`
+                : "100% · Highest broadcaster rank"}
+          </p>
+        </div>
+      </section>
+
       {isPaused && <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-black/55 px-5 py-3 font-display text-sm text-white shadow-xl backdrop-blur-md">Broadcast paused</div>}
 
       {isV2Open && <section aria-label="New Tarot display test" className="absolute bottom-[calc(3.5rem+max(1rem,env(safe-area-inset-bottom)))] left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 flex min-h-0 w-[calc(100vw-5rem)] max-w-[32rem] flex-col overflow-hidden md:right-[5.25rem] md:w-[min(38vw,32rem)]">
         <LiveTarotCardDisplayV2 onDone={() => setIsV2Open(false)} isBroadcaster={isBroadcaster} />
       </section>}
 
-      {isLiveTarotBookOpen && (
+      {showTarotBook && (
         <section aria-label="Live Tarot card display" className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 mx-auto w-auto max-w-xl px-2 sm:inset-x-6">
           <div className="flex items-center justify-between gap-3">
             <div className="grid grid-cols-2 rounded-lg border border-white/15 bg-black/45 p-1 shadow-lg backdrop-blur-md">
-              <button type="button" onClick={() => setLiveTarotBookSpread("single")} aria-pressed={liveTarotBookSpread === "single"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>1 Card</button>
-              <button type="button" onClick={() => setLiveTarotBookSpread("three")} aria-pressed={liveTarotBookSpread === "three"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>3 Cards</button>
+              <button type="button" onClick={() => setBookSpread("single")} disabled={!isBroadcaster} aria-pressed={liveTarotBookSpread === "single"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>1 Card</button>
+              <button type="button" onClick={() => setBookSpread("three")} disabled={!isBroadcaster} aria-pressed={liveTarotBookSpread === "three"} className={`rounded-md px-3 py-1.5 text-[10px] font-semibold transition ${liveTarotBookSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-200 hover:bg-white/10"}`}>3 Cards</button>
             </div>
             {isBroadcaster && <button type="button" onClick={() => setIsBookReadingOpen(true)} disabled={!liveTarotBookCards.some((card) => card.isRevealed)} aria-label="Open card interpretations" className="flex h-8 items-center gap-1 rounded-full border border-mystic-gold/40 bg-black/45 px-3 text-[10px] font-semibold text-mystic-gold shadow-lg backdrop-blur-md transition disabled:opacity-40"><BookOpen className="h-4 w-4" />Reading</button>}
-            <button type="button" onClick={() => { setIsLiveTarotBookOpen(false); setLiveTarotBookCards([]); setIsBookReadingOpen(false); }} aria-label="Close Tarot card display" className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-slate-200 shadow-lg backdrop-blur-md transition hover:border-mystic-gold/50 hover:text-mystic-gold">
+            {(isBroadcaster || !isBookDisplay) && <button type="button" onClick={() => { setIsLiveTarotBookOpen(false); setBookCards([]); setIsBookReadingOpen(false); }} aria-label="Close Tarot card display" className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-slate-200 shadow-lg backdrop-blur-md transition hover:border-mystic-gold/50 hover:text-mystic-gold">
               <X className="h-4 w-4" />
-            </button>
+            </button>}
           </div>
 
           <div className={`mx-auto mt-4 grid items-start gap-3 ${liveTarotBookSpread === "single" ? "max-w-[10rem] grid-cols-1" : "grid-cols-3"}`}>
@@ -351,8 +407,8 @@ export default function ImmersiveLiveRoom({
                   <div className="perspective-1000 w-full aspect-[2/3]">
                     <button
                       type="button"
-                      onClick={() => setLiveTarotBookCards((cards) => cards.map((card, cardIndex) => cardIndex === index ? { ...card, isRevealed: true } : card))}
-                      disabled={item.isRevealed}
+                      onClick={() => flipBookCard(index)}
+                      disabled={item.isRevealed || !isBroadcaster}
                       aria-label={item.isRevealed ? `${item.card.name}, ${item.isReversed ? "reversed" : "upright"}` : `Reveal ${position.toLowerCase()} card`}
                       className={`relative h-full w-full duration-700 transform-style-3d cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-mystic-gold ${item.isRevealed ? "rotate-y-180" : ""}`}
                     >
@@ -370,7 +426,7 @@ export default function ImmersiveLiveRoom({
       )}
 
       {isBroadcaster && isLiveTarotBookOpen && isBookReadingOpen && (
-        <div className="absolute bottom-[calc(3.5rem+max(1rem,env(safe-area-inset-bottom)))] left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-50 flex min-h-0 w-[calc(100vw-5rem)] max-w-[32rem] flex-col overflow-hidden md:right-[5.25rem] md:w-[min(38vw,32rem)]">
+        <div className="absolute inset-x-3 bottom-[calc(3.5rem+max(1rem,env(safe-area-inset-bottom)))] z-50 mx-auto flex max-h-[min(38dvh,20rem)] min-h-0 max-w-xl flex-col overflow-hidden sm:inset-x-6">
           <section role="dialog" aria-modal="true" aria-label="Tarot interpretations" onClick={(event) => event.stopPropagation()} className="flex max-h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border border-mystic-gold/25 bg-[#100b1a]/95 px-3 pb-3 pt-3 shadow-xl">
             <div className="mb-2 flex shrink-0 items-center justify-between">
               <h3 className="font-display text-[11px] text-mystic-gold">Reading</h3>
@@ -383,7 +439,7 @@ export default function ImmersiveLiveRoom({
         </div>
       )}
 
-      {readingCards.length > 0 && <section aria-label="Live Tarot reading" className="absolute bottom-[calc(8rem+env(safe-area-inset-bottom))] left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 flex min-h-0 w-[8.5rem] flex-col overflow-hidden md:right-[5.25rem] md:w-[min(38vw,20rem)] md:translate-x-0">
+      {readingCards.length > 0 && !isBookDisplay && <section aria-label="Live Tarot reading" className="absolute bottom-[calc(8rem+env(safe-area-inset-bottom))] left-auto right-[3.9rem] top-[calc(env(safe-area-inset-top)+4.25rem)] z-10 flex min-h-0 w-[8.5rem] flex-col overflow-hidden md:right-[5.25rem] md:w-[min(38vw,20rem)] md:translate-x-0">
         <div className={`grid shrink-0 items-start gap-1 md:gap-2 ${readingSpread === "single" ? "grid-cols-1 justify-items-center" : "grid-cols-3"}`}>
           {readingCards.map((item, index) => {
             const position = readingSpread === "single" ? "Guidance" : ["Past", "Present", "Future"][index];
@@ -419,18 +475,16 @@ export default function ImmersiveLiveRoom({
           <button onClick={onShare} aria-label="Share broadcast" title="Share broadcast" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-white/20 bg-black/35 text-white shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Share2 className="h-5 w-5" /><span className="text-[8px] font-semibold">Share</span></button>
         </>}
         {canUseTarot && <button onClick={() => setIsReadingControlsOpen(true)} aria-label="Open Tarot reading controls" title="Tarot" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90"><Sparkles className="h-5 w-5" /><span className="text-[8px] font-semibold">Tarot</span></button>}
+        <button type="button" onClick={openLiveTarotBook} aria-label="Open Live Tarot card display" title="Live Tarot cards" className="flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90">
+          <BookOpen className="h-5 w-5" />
+          <span className="text-[8px] font-semibold">Tarot</span>
+        </button>
         {isBroadcaster && <>
           <button onClick={onTogglePause} aria-label={isPaused ? "Resume broadcast" : "Pause broadcast"} title={isPaused ? "Resume broadcast" : "Pause broadcast"} className="flex h-11 w-11 items-center justify-center rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90">{isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button>
           <button onClick={() => setIsEndConfirmationOpen(true)} aria-label="End broadcast" title="End broadcast" className="flex h-11 w-11 items-center justify-center rounded-full border border-rose-300/35 bg-black/35 text-rose-200 shadow-lg backdrop-blur-md transition hover:bg-rose-950/60 active:scale-90"><Video className="h-4 w-4" /></button>
-          <button onClick={onEarnings} aria-label="Creator earnings" title="Creator earnings" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white/80 shadow-lg backdrop-blur-md transition hover:bg-white/10 active:scale-90"><BarChart3 className="h-4 w-4" /></button>
         </>}
 
       </aside>
-
-      <button type="button" onClick={openLiveTarotBook} aria-label="Open Live Tarot card display" title="Live Tarot cards" className="absolute bottom-[calc(6.25rem+env(safe-area-inset-bottom))] left-2 z-20 flex min-h-12 min-w-12 flex-col items-center justify-center gap-1 rounded-full border border-mystic-gold/40 bg-black/35 text-mystic-gold shadow-lg backdrop-blur-md transition hover:bg-black/55 active:scale-90 md:bottom-auto md:left-5 md:top-[43%] md:-translate-y-1/2">
-        <BookOpen className="h-5 w-5" />
-        <span className="text-[8px] font-semibold">Tarot</span>
-      </button>
 
       {isBroadcaster && showInterpretations && hasRevealedReading && <div className="pointer-events-none absolute inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-20 px-4 sm:px-6 md:hidden">
         <div className="pointer-events-auto ml-0 mr-[4.75rem] flex flex-col gap-1.5">
@@ -460,7 +514,7 @@ export default function ImmersiveLiveRoom({
         <div className="min-w-0 max-w-full space-y-1.5 px-2 pb-2 pt-5">
           {chat.slice(-8).map((line) => <p key={line.id} className={`max-w-full whitespace-normal break-words text-xs leading-relaxed [overflow-wrap:anywhere] [text-shadow:0_1px_3px_rgba(0,0,0,.9),0_0_8px_rgba(0,0,0,.5)] ${line.kind === "gift" ? "text-mystic-gold" : line.kind === "system" ? "text-teal-200" : "text-white"}`}>{line.senderUid && <button type="button" onClick={() => onViewMemberProfile(line.senderUid!)} aria-label={`View ${line.sender}'s profile`} className="mr-1 inline-flex h-5 w-5 shrink-0 align-middle items-center justify-center overflow-hidden rounded-full border border-white/30 bg-[#25182e]/85 text-[8px] font-bold text-mystic-gold transition hover:border-mystic-gold active:scale-95">{line.avatarUrl ? <img src={line.avatarUrl} alt="" className="h-full w-full object-cover" /> : line.sender.slice(0, 2).toUpperCase()}</button>}<strong className={`mr-1 font-semibold ${chatNameColor(line.sender)}`}>{line.senderUid ? <button type="button" onClick={() => onViewMemberProfile(line.senderUid!)} className="transition hover:text-mystic-gold">{line.sender}</button> : line.sender}</strong>{line.text}</p>)}
         </div>
-        {isBroadcaster && <div className="mt-1 flex items-center gap-2 px-2 text-[10px] text-white/75"><Gem className="h-3.5 w-3.5 text-mystic-gold" />{formatCount(giftsReceived)} Gems received <span className="text-white/30">·</span>{currentRank}</div>}
+        {isBroadcaster && <div className="mt-1 flex items-center gap-2 px-2 text-[10px] text-white/75"><Gem className="h-3.5 w-3.5 text-mystic-gold" />{formatCount(giftsReceived)} Gems received <span className="text-white/30">·</span>{broadcasterRank?.currentRank.name ?? "Rank unavailable"}</div>}
       </div>
 
       <form onSubmit={onSendChat} className="absolute inset-x-4 bottom-0 z-20 flex gap-2 pb-[max(1rem,env(safe-area-inset-bottom))] sm:inset-x-6">
@@ -470,13 +524,13 @@ export default function ImmersiveLiveRoom({
 
       {isReadingControlsOpen && canUseTarot && <div className="pointer-events-none fixed inset-x-0 bottom-16 z-50 flex justify-center md:bottom-0"><section role="dialog" aria-modal="true" aria-label="Live Tarot reading controls" onClick={(event) => event.stopPropagation()} className="pointer-events-auto max-h-[calc(100dvh-7rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-2xl md:max-h-[34dvh] border border-mystic-gold/25 bg-[#100c18]/90 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-2xl backdrop-blur-md"><div className="mb-2 flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-mystic-gold">Reader only · private</p><h2 className="font-display text-sm text-white">Live Tarot desk</h2></div><button onClick={() => setIsReadingControlsOpen(false)} aria-label="Close reading controls" className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><div className="mb-2 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-black/20 p-1"><button onClick={() => onChooseSpread("single")} aria-pressed={readingSpread === "single"} className={`h-8 rounded-lg text-[11px] font-semibold transition ${readingSpread === "single" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>Single Card</button><button onClick={() => onChooseSpread("three")} aria-pressed={readingSpread === "three"} className={`h-8 rounded-lg text-[11px] font-semibold transition ${readingSpread === "three" ? "bg-mystic-gold text-[#100b1c]" : "text-slate-300 hover:bg-white/5"}`}>Three Card</button></div><button onClick={() => { onStartReading(); setIsReadingControlsOpen(false); }} className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-mystic-gold text-sm font-semibold text-[#100b1c] shadow-[0_0_24px_rgba(243,198,95,.16)] transition hover:brightness-110 active:scale-[.99]"><Sparkles className="h-4 w-4" />Draw Cards</button><button onClick={() => { setIsCardPickerOpen(true); setIsReadingControlsOpen(false); }} className="mt-1.5 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-200"><BookOpen className="h-4 w-4 text-teal-200" />Choose physical cards</button>{readingCards.length > 0 && <><div className="mt-1.5 grid grid-cols-2 gap-1.5"><button onClick={onRevealNext} disabled={readingCards.every((card) => card.isRevealed)} className="flex h-9 items-center justify-center gap-2 rounded-lg border border-mystic-gold/30 bg-mystic-gold/[0.06] text-xs font-semibold text-mystic-gold disabled:opacity-40"><Eye className="h-4 w-4" />Reveal next</button><button onClick={onRevealAll} disabled={readingCards.every((card) => card.isRevealed)} className="h-9 rounded-lg border border-white/10 text-xs font-semibold text-slate-200 disabled:opacity-40">Reveal all</button></div><button onClick={onToggleInterpretations} aria-pressed={showInterpretations} className="mt-1.5 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-200"><BookOpen className="h-4 w-4 text-teal-200" />{showInterpretations ? "Hide viewer interpretations" : "Show viewer interpretations"}</button><button onClick={onResetReading} className="mt-1.5 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-rose-300/20 text-xs font-semibold text-rose-200"><RefreshCw className="h-4 w-4" />Clear Reading</button></>}</section></div>}
 
-      {isBroadcastInfoOpen && isBroadcaster && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setIsBroadcastInfoOpen(false)}><section role="dialog" aria-modal="true" aria-label="Edit broadcast information" onClick={(event) => event.stopPropagation()} className="w-full max-w-md space-y-4 rounded-2xl border border-mystic-gold/25 bg-[#100c18] p-5 shadow-2xl"><div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-mystic-gold">Live broadcast</p><h2 className="font-display text-lg text-white">Edit broadcast info</h2></div><button onClick={() => setIsBroadcastInfoOpen(false)} aria-label="Close broadcast editor" className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><label className="block space-y-1.5 text-xs text-slate-300">Title<input value={broadcastTitle} onChange={(event) => setBroadcastTitle(event.target.value)} maxLength={80} className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><label className="block space-y-1.5 text-xs text-slate-300">Short description<textarea value={broadcastDescription} onChange={(event) => setBroadcastDescription(event.target.value)} maxLength={140} rows={2} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><label className="block space-y-1.5 text-xs text-slate-300">Hashtags / topics<input value={broadcastHashtags} onChange={(event) => setBroadcastHashtags(event.target.value)} maxLength={100} placeholder="#Tarot #Guidance" className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><button onClick={() => { onUpdateBroadcastInfo(broadcastTitle.trim() || "Live reading", broadcastDescription.trim(), broadcastHashtags.trim()); setIsBroadcastInfoOpen(false); }} className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-mystic-gold text-sm font-semibold text-[#100b1c]"><Check className="h-4 w-4" />Save changes</button></section></div>}
+      {isBroadcastInfoOpen && isBroadcaster && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setIsBroadcastInfoOpen(false)}><section role="dialog" aria-modal="true" aria-label="Edit broadcast information" onClick={(event) => event.stopPropagation()} className="w-full max-w-md space-y-4 rounded-2xl border border-mystic-gold/25 bg-[#100c18] p-5 shadow-2xl"><div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-mystic-gold">Live broadcast</p><h2 className="font-display text-lg text-white">Edit broadcast info</h2></div><button onClick={() => setIsBroadcastInfoOpen(false)} aria-label="Close broadcast editor" className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><label className="block space-y-1.5 text-xs text-slate-300">Title<input value={broadcastTitle} onChange={(event) => setBroadcastTitle(event.target.value)} maxLength={80} className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><label className="block space-y-1.5 text-xs text-slate-300">Short description<textarea value={broadcastDescription} onChange={(event) => setBroadcastDescription(event.target.value)} maxLength={140} rows={2} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><label className="block space-y-1.5 text-xs text-slate-300">Hashtags / topics<input value={broadcastHashtags} onChange={(event) => setBroadcastHashtags(event.target.value)} maxLength={100} placeholder="#Tarot #Guidance" className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-mystic-gold/70" /></label><LiveThumbnailPicker defaultImage={DEFAULT_LIVE_THUMBNAIL} /><button onClick={() => { onUpdateBroadcastInfo(broadcastTitle.trim() || "Live reading", broadcastDescription.trim(), broadcastHashtags.trim()); setIsBroadcastInfoOpen(false); }} className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-mystic-gold text-sm font-semibold text-[#100b1c]"><Check className="h-4 w-4" />Save changes</button></section></div>}
 
       {isEndConfirmationOpen && isBroadcaster && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"><section role="alertdialog" aria-modal="true" aria-labelledby="end-broadcast-title" className="w-full max-w-sm rounded-2xl border border-rose-300/25 bg-[#100c18] p-5 shadow-2xl"><h2 id="end-broadcast-title" className="font-display text-lg text-white">End this broadcast?</h2><p className="mt-2 text-sm leading-relaxed text-slate-300">Viewers will leave the live room. You can start another broadcast later.</p><div className="mt-5 grid grid-cols-2 gap-2"><button onClick={() => setIsEndConfirmationOpen(false)} className="h-11 rounded-lg border border-white/15 text-sm font-semibold text-white">Keep live</button><button onClick={onEndBroadcast} className="h-11 rounded-lg bg-rose-600 text-sm font-semibold text-white">End broadcast</button></div></section></div>}
 
       {notice && <div role="status" className="fixed bottom-20 left-1/2 z-[70] -translate-x-1/2 rounded-full border border-white/10 bg-[#21182c]/95 px-4 py-2 text-center text-xs text-white shadow-xl backdrop-blur-md">{notice}</div>}
 
-      {isGiftSheetOpen && !isBroadcaster && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsGiftSheetOpen(false)}><section role="dialog" aria-modal="true" aria-label="Gifts and tips" onClick={(event) => event.stopPropagation()} className="max-h-[82dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-white/10 bg-[#100c18] px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl"><div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" /><div className="mb-4 flex items-center justify-between"><div><h2 className="font-display text-lg text-white">Send a gift or tip</h2><p className="flex items-center gap-1 text-xs text-teal-200"><Gem className="h-3.5 w-3.5" />Your balance: {formatCount(viewerGems)} Gems</p></div><button onClick={() => setIsGiftSheetOpen(false)} aria-label="Close gifts and tips" className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><h3 className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Quick gifts</h3><div className="grid grid-cols-5 gap-2">{gifts.map((gift) => <button key={gift.name} onClick={() => onSendGift(gift)} className="flex min-h-24 flex-col items-center justify-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-1 text-center active:border-mystic-gold"><span className="text-2xl">{gift.emoji}</span><span className="text-[10px] text-white">{gift.name}</span><span className="text-[10px] text-teal-200">{gift.gems} Gems</span></button>)}</div><div className="mt-5 border-t border-white/10 pt-4"><div className="mb-2 flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-mystic-gold" /><h3 className="text-xs font-semibold text-white">Real cash tip</h3></div><p className="mb-3 text-[11px] leading-relaxed text-slate-400">Cash tips are processed through Stripe. Checkout is not connected in this demo; selecting an amount will not charge you.</p><div className="grid grid-cols-3 gap-2">{[1, 5, 10, 20, 50, 100].map((amount) => <button key={amount} onClick={() => onSendCashTip(String(amount))} className="h-10 rounded-lg border border-mystic-gold/20 bg-mystic-gold/[0.04] text-sm font-semibold text-mystic-gold">${amount}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (Number(customTip) > 0) onSendCashTip(customTip); }} className="mt-2 flex gap-2"><label className="sr-only" htmlFor="custom-live-tip">Custom tip amount</label><div className="flex h-11 flex-1 items-center rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-slate-300">$<input id="custom-live-tip" type="number" min="1" step="1" value={customTip} onChange={(event) => setCustomTip(event.target.value)} placeholder="Custom amount" className="ml-2 min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-slate-500" /></div><button className="rounded-lg bg-white/10 px-4 text-xs font-semibold text-white">Continue</button></form></div></section></div>}
+      {isGiftSheetOpen && !isBroadcaster && <div className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center"><section role="dialog" aria-label="Gifts and tips" className="pointer-events-auto max-h-[58dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-2xl border border-white/15 bg-[#100c18]/80 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl backdrop-blur-md"><div className="mx-auto mb-2 h-1 w-10 rounded-full bg-white/20" /><div className="mb-2 flex items-center justify-between"><div><h2 className="font-display text-lg text-white">Send a gift or tip</h2><p className="flex items-center gap-1 text-xs text-teal-200"><Gem className="h-3.5 w-3.5" />Your balance: {formatCount(viewerGems)} Gems</p></div><button onClick={() => setIsGiftSheetOpen(false)} aria-label="Close gifts and tips" className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400"><X className="h-5 w-5" /></button></div><h3 className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Quick gifts</h3><div className="grid grid-cols-5 gap-2">{gifts.map((gift) => <button key={gift.name} onClick={() => onSendGift(gift)} className="flex min-h-[4.5rem] flex-col items-center justify-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.06] px-1 text-center active:border-mystic-gold"><span className="text-xl">{gift.emoji}</span><span className="text-[10px] text-white">{gift.name}</span><span className="text-[10px] text-teal-200">{gift.gems} Gems</span></button>)}</div><div className="mt-3 border-t border-white/10 pt-3"><div className="mb-1 flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-mystic-gold" /><h3 className="text-xs font-semibold text-white">Real cash tip</h3></div><p className="mb-2 text-[11px] leading-relaxed text-slate-300">{cashTipsEnabled ? "Cash tips are paid securely through Stripe checkout (test mode). The broadcaster receives 80%; 20% supports the platform." : (cashTipsMessage || "Checking whether this broadcaster can receive paid tips…")}</p><div className="grid grid-cols-3 gap-2">{[1, 5, 10, 20, 50, 100].map((amount) => <button key={amount} disabled={!cashTipsEnabled} onClick={() => onSendCashTip(String(amount))} className="h-10 disabled:opacity-40 rounded-lg border border-mystic-gold/20 bg-mystic-gold/[0.04] text-sm font-semibold text-mystic-gold">${amount}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (cashTipsEnabled && Number(customTip) > 0) onSendCashTip(customTip); }} className="mt-2 flex gap-2"><label className="sr-only" htmlFor="custom-live-tip">Custom tip amount</label><div className="flex h-11 flex-1 items-center rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-slate-300">$<input id="custom-live-tip" type="number" min="1" step="1" value={customTip} onChange={(event) => setCustomTip(event.target.value)} placeholder="Custom amount" className="ml-2 min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-slate-500" /></div><button disabled={!cashTipsEnabled} className="rounded-lg bg-white/10 px-4 text-xs font-semibold text-white disabled:opacity-40">Continue</button></form></div></section></div>}
 
     </section>
   );

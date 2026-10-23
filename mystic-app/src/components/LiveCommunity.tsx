@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Music2,
   PawPrint,
+  RefreshCw,
   Send,
   Sparkles,
   Users,
@@ -23,11 +24,16 @@ import {
   X
 } from "lucide-react";
 import { createLiveAvatarThumbnail } from "../lib/avatarImage";
+import { useBroadcasterRank } from "../lib/useBroadcasterRank";
 import { requestNotification } from "../lib/notifications";
 import { eventsRef, useLiveBroadcast, useLiveViewer, type LiveSessionMeta } from "../lib/liveVideo";
 import { TAROT_DECK, type TarotCard } from "../data/spiritualData";
 import ImmersiveLiveRoom, { type LiveReadingCard, type LiveSpread } from "./ImmersiveLiveRoom";
 import NotificationBell from "./NotificationBell";
+import LiveThumbnailPicker from "./LiveThumbnailPicker";
+import { loadLiveThumbnails, type LiveThumbnail } from "../lib/liveThumbnails";
+import { isLiveSessionActive, LIVE_DISPLAY_STALE_MS } from "../lib/liveSessionState";
+import DEFAULT_LIVE_THUMBNAIL from "../assets/images/mystical_tarot_reader_1790704974614.jpg";
 
 type LiveTopic =
   | "Tarot & Spirituality"
@@ -63,16 +69,22 @@ type RemoteReading = {
   topic: LiveTopic;
   isPaused: boolean;
   spread: LiveSpread;
-  cards: { id: number; reversed: boolean; revealed: boolean }[];
+  cards: { id: number; reversed: boolean; revealed: boolean; book?: boolean }[];
   showInterpretations: boolean;
   updatedAt: number;
 };
 
 type LiveSessionDoc = LiveSessionMeta & { ownerUid: string; sessionId: string; startedAt: number; updatedAt: number };
+type BroadcasterEarnings = {
+  totalGemsEarned: number;
+  todayGemsEarned: number;
+  lifetimeGemsEarned: number | null;
+  transactions: { id: string; date: string; viewerName: string; gemsAmount: number; status: string }[];
+};
 
 // A published broadcast is considered live while its heartbeat is recent
 const BROADCAST_HEARTBEAT_MS = 30000;
-const BROADCAST_STALE_MS = 90000;
+const BROADCAST_STALE_MS = LIVE_DISPLAY_STALE_MS;
 
 type ChatLine = { id: number | string; sender: string; senderUid?: string; avatarUrl?: string; text: string; kind?: "gift" | "system" };
 
@@ -104,16 +116,6 @@ const gifts = [
   { name: "Teddy", emoji: "🧸", gems: 500 }
 ];
 
-const ranks = [
-  { name: "New Seer", gems: 0 },
-  { name: "Mystic", gems: 1000 },
-  { name: "Oracle", gems: 5000 },
-  { name: "High Oracle", gems: 10000 },
-  { name: "Celestial Reader", gems: 25000 },
-  { name: "Grand Mystic", gems: 50000 },
-  { name: "Luna Master", gems: 100000 }
-];
-
 const mockChat: ChatLine[] = [
   { id: 1, sender: "moonlit.mara", text: "Just joined, this is lovely." },
   { id: 2, sender: "Juniper", text: "That really resonates, thank you." },
@@ -138,14 +140,40 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isBroadcastPaused, setIsBroadcastPaused] = useState(false);
   const viewerGems = gemBalance;
-  const [lifetimeGemsReceived, setLifetimeGemsReceived] = useState(0);
   const [giftsReceived, setGiftsReceived] = useState(0);
   const [hasCreatorAccess, setHasCreatorAccess] = useState(false);
+  const [earnings, setEarnings] = useState<BroadcasterEarnings | null>(null);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsError, setEarningsError] = useState("");
+  const [earningsRefresh, setEarningsRefresh] = useState(0);
+  const [payout, setPayout] = useState<{ linked: boolean; ready: boolean; reason?: string } | null>(null);
+  const [payoutError, setPayoutError] = useState("");
+  // Payout readiness is read live from Stripe by the server for the signed-in broadcaster only
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (screen !== "earnings" || !user || user.isAnonymous) return;
+    let cancelled = false;
+    setPayout(null);
+    setPayoutError("");
+    void (async () => {
+      try {
+        const response = await fetch("/api/connect/status", { headers: { Authorization: `Bearer ${await user.getIdToken()}` } });
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (response.ok) setPayout(data);
+        else setPayoutError(data.error || "Could not read payout status.");
+      } catch {
+        if (!cancelled) setPayoutError("Could not read payout status.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [screen, currentUserId]);
   const [viewerCount, setViewerCount] = useState(742);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
   const [isGiftSheetOpen, setIsGiftSheetOpen] = useState(false);
   const [readingSpread, setReadingSpread] = useState<LiveSpread>("three");
   const [liveReading, setLiveReading] = useState<LiveReadingCard[]>([]);
+  const [bookReading, setBookReading] = useState<{ spread: LiveSpread; cards: LiveReadingCard[] } | null>(null);
   const [showInterpretations, setShowInterpretations] = useState(true);
   const [chatInput, setChatInput] = useState("");
   const [customTip, setCustomTip] = useState("");
@@ -156,6 +184,35 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const [liveSessions, setLiveSessions] = useState<LiveSessionDoc[]>([]);
   const [clock, setClock] = useState(() => Date.now());
   const [guestUid, setGuestUid] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (screen !== "earnings") return;
+    let cancelled = false;
+    setEarnings(null);
+    setEarningsError("");
+    setEarningsLoading(true);
+    void (async () => {
+      const user = auth.currentUser;
+      if (!user || user.isAnonymous || user.uid !== currentUserId) {
+        throw new Error("Sign in with your broadcaster account to view earnings.");
+      }
+      const token = await user.getIdToken();
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const response = await fetch(`/api/live/earnings?timeZone=${encodeURIComponent(timeZone)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not load broadcaster earnings.");
+      return data as BroadcasterEarnings;
+    })().then((data) => {
+      if (!cancelled) setEarnings(data);
+    }).catch((error) => {
+      if (!cancelled) setEarningsError(error instanceof Error ? error.message : "Could not load broadcaster earnings.");
+    }).finally(() => {
+      if (!cancelled) setEarningsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [screen, currentUserId, earningsRefresh]);
 
   // Signed-out visitors get an anonymous, viewer-only Firebase identity (own UID, no profile doc)
   useEffect(() => {
@@ -189,7 +246,6 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const currentRank = [...ranks].reverse().find((rank) => rank.gems <= lifetimeGemsReceived) ?? ranks[0];
   const readerProfile = isAuthorizedReader;
   const tarotAllowed = readerProfile && screen === "broadcast";
   const isLiveNow = Boolean(myBroadcaster && liveStartedAt);
@@ -207,14 +263,14 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     topic: (topics.some((item) => item.name === remote.topic) ? remote.topic : "Just Chatting") as LiveTopic,
     viewers: 1,
     theme: "from-[#37234f] via-[#68476a] to-[#bd7d69]",
-    image: "/src/assets/images/mystical_tarot_reader_1790704974614.jpg"
+    image: DEFAULT_LIVE_THUMBNAIL
   });
 
   // One card per broadcaster (newest session), excluding the viewer's own broadcast
   const liveRemotes = useMemo(() => {
     const newest = new Map<string, LiveSessionDoc>();
     liveSessions
-      .filter((session) => session.ownerUid !== viewerUid && clock - (session.updatedAt ?? session.startedAt) < BROADCAST_STALE_MS)
+      .filter((session) => session.ownerUid !== viewerUid && isLiveSessionActive(session, clock, BROADCAST_STALE_MS))
       .forEach((session) => {
         const current = newest.get(session.ownerUid);
         if (!current || session.startedAt > current.startedAt) newest.set(session.ownerUid, session);
@@ -231,13 +287,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   const followTargetUid = activeSession?.ownerUid ?? null;
   // Rank source: server-written lifetime total for the broadcaster being shown
   const rankOwnerUid = screen === "broadcast" ? currentUserId : activeSession?.ownerUid ?? null;
-  useEffect(() => {
-    setLifetimeGemsReceived(0);
-    if (!rankOwnerUid) return;
-    return onSnapshot(doc(db, "broadcasterStats", rankOwnerUid), (snap) => {
-      setLifetimeGemsReceived(Number(snap.data()?.lifetimeGemsReceived) || 0);
-    }, () => setLifetimeGemsReceived(0));
-  }, [rankOwnerUid]);
+  const { rank: broadcasterRank } = useBroadcasterRank(rankOwnerUid);
   useEffect(() => {
     if (!currentUserId || !followTargetUid || followTargetUid === currentUserId) return;
     return onSnapshot(
@@ -269,6 +319,36 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   });
   const visibleBroadcasters = [...(myBroadcaster && isLiveNow ? [myBroadcaster] : []), ...liveRemotes.map(toBroadcaster)]
     .filter((broadcaster) => selectedTopic === "All" || broadcaster.topic === selectedTopic);
+
+  // Promo thumbnails for the cards on screen. URLs are only swapped when the broadcaster changes the image or the signed link is aging.
+  const [thumbnails, setThumbnails] = useState<Record<string, LiveThumbnail & { fetchedAt: number }>>({});
+  const thumbnailUids = visibleBroadcasters.map((broadcaster) => broadcaster.id === "your-live" ? currentUserId : broadcaster.profileUid).filter((uid): uid is string => Boolean(uid)).sort().join(",");
+  useEffect(() => {
+    if (screen !== "directory" || !thumbnailUids) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const latest = await loadLiveThumbnails(thumbnailUids.split(","));
+        if (cancelled) return;
+        const now = Date.now();
+        setThumbnails((current) => {
+          const next: typeof current = {};
+          for (const uid of thumbnailUids.split(",")) {
+            const fresh = latest[uid];
+            const known = current[uid];
+            if (!fresh) continue;
+            next[uid] = known && known.version === fresh.version && now - known.fetchedAt < 30 * 60_000 ? known : { ...fresh, fetchedAt: now };
+          }
+          return next;
+        });
+      } catch {
+        // Cards keep the default artwork when thumbnails cannot be loaded.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [screen, thumbnailUids]);
 
   // Real device-to-device video. The broadcaster's camera stays on while live, even when browsing other screens
   const [liveAvatarThumb, setLiveAvatarThumb] = useState("");
@@ -339,7 +419,6 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     setDoc(doc(eventsRef(activeEventsSessionId), eventId), {
       uid: viewerUid,
       sender: (displayName?.trim() || "Guest").slice(0, 80),
-      ...(avatarUrl ? { avatarUrl } : {}),
       text: text.slice(0, 300),
       kind,
       ...(amount === undefined ? {} : { amount }),
@@ -379,15 +458,15 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       hashtags: myBroadcaster.hashtags ?? "",
       topic: myBroadcaster.topic,
       isPaused: isBroadcastPaused,
-      spread: readingSpread,
-      cards: liveReading.map((item) => ({ id: item.card.id, reversed: item.isReversed, revealed: item.isRevealed })),
+      spread: bookReading?.spread ?? readingSpread,
+      cards: (bookReading?.cards ?? liveReading).map((item) => ({ id: item.card.id, reversed: item.isReversed, revealed: item.isRevealed, ...(bookReading ? { book: true } : {}) })),
       showInterpretations,
       updatedAt: Date.now()
     }).catch((error) => console.error("Failed to publish live reading:", error));
     publish();
     const heartbeat = window.setInterval(publish, BROADCAST_HEARTBEAT_MS);
     return () => window.clearInterval(heartbeat);
-  }, [canPublish, currentUserId, myBroadcaster, isBroadcastPaused, readingSpread, liveReading, showInterpretations]);
+  }, [canPublish, currentUserId, myBroadcaster, isBroadcastPaused, readingSpread, liveReading, bookReading, showInterpretations]);
 
   // Remove the published broadcast when it ends, the permission is revoked, or the room unmounts
   useEffect(() => {
@@ -425,7 +504,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       topic: broadcastTopic,
       viewers: 1,
       theme: readerProfile ? "from-[#37234f] via-[#68476a] to-[#bd7d69]" : "from-[#283846] via-[#4a6872] to-[#9eafb0]",
-      image: readerProfile ? "/src/assets/images/mystical_tarot_reader_1790704974614.jpg" : undefined
+      image: readerProfile ? DEFAULT_LIVE_THUMBNAIL : undefined
     };
     setMyBroadcaster(newBroadcaster);
     setSelectedBroadcaster(newBroadcaster);
@@ -450,7 +529,9 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
     setNotice("Your broadcast has ended.");
   };
 
+  const giftInFlight = useRef(false);
   const sendGift = async (gift: typeof gifts[number]) => {
+    if (giftInFlight.current) return;
     const user = auth.currentUser;
     if (!user || user.isAnonymous) {
       setNotice("Sign in to send gifts.");
@@ -464,26 +545,90 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
       setNotice("Not enough Gems for this gift.");
       return;
     }
+    // One request ID per intentional gift; the server credits a repeated ID only once.
+    const requestId = crypto.randomUUID().replace(/-/g, "");
+    const body = JSON.stringify({ context: "live", giftId: gift.name.toLowerCase(), recipientId: activeSession.ownerUid, sessionId: activeSession.sessionId, requestId });
+    giftInFlight.current = true;
     try {
-      const idToken = await user.getIdToken();
-      const response = await fetch("/api/spend-gems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ context: "live", giftId: gift.name.toLowerCase(), recipientId: activeSession.ownerUid, sessionId: activeSession.sessionId })
-      });
-      if (!response.ok) throw new Error("Gift was not confirmed");
-    } catch {
-      setNotice("Gift could not be sent. No Gems were spent.");
-      return;
+      const idToken = await user.getIdToken().catch(() => null);
+      if (!idToken) {
+        setNotice("Gift could not be sent. No Gems were spent.");
+        return;
+      }
+      let response: Response | null = null;
+      for (let attempt = 0; attempt < 2 && !response; attempt += 1) {
+        try {
+          const attemptResponse = await fetch("/api/spend-gems", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` }, body });
+          if (attemptResponse.status >= 500) {
+            console.error("Gift confirmation failed:", attemptResponse.status);
+          } else {
+            response = attemptResponse;
+          }
+        } catch {
+          // Network failure: the gift may or may not have been recorded, so retry once with the same request ID.
+        }
+      }
+      if (!response) {
+        setNotice("Gift could not be confirmed. Check your Gem balance before trying again.");
+        return;
+      }
+      if (!response.ok) {
+        const failure = await response.json().catch(() => null);
+        setNotice(`${typeof failure?.error === "string" ? failure.error : "Gift could not be confirmed."} Check your Gem balance before trying again.`);
+        return;
+      }
+      const confirmation = await response.json().catch(() => null);
+      if (confirmation?.success !== true || typeof confirmation.transactionId !== "string") {
+        setNotice("Gift could not be confirmed. Check your Gem balance before trying again.");
+        return;
+      }
+    } finally {
+      giftInFlight.current = false;
     }
     publishLiveEvent("gift", `sent a ${gift.name} ${gift.emoji} — ${gift.gems} Gems`, gift.gems);
     setIsGiftSheetOpen(false);
     setNotice(`${gift.name} sent to ${selectedBroadcaster.name}`);
   };
 
-  const sendCashTip = (amount: string) => {
-    setNotice(`Stripe checkout is not connected. No $${amount} tip was charged.`);
-    setIsGiftSheetOpen(false);
+  const [cashTips, setCashTips] = useState<{ enabled: boolean; message: string }>({ enabled: false, message: "" });
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!isGiftSheetOpen || screen !== "viewer" || !activeSession || !user || user.isAnonymous) return;
+    let cancelled = false;
+    setCashTips({ enabled: false, message: "" });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/live/tip-status?sessionId=${encodeURIComponent(activeSession.sessionId)}`, { headers: { Authorization: `Bearer ${await user.getIdToken()}` } });
+        const data = await response.json();
+        if (!cancelled) setCashTips({ enabled: response.ok && data.enabled === true, message: data.reason || data.error || "Paid tips are unavailable right now." });
+      } catch {
+        if (!cancelled) setCashTips({ enabled: false, message: "Paid tips are unavailable right now." });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isGiftSheetOpen, screen, activeSession?.sessionId]);
+
+  // The server resolves the broadcaster from the live session and prices the checkout; only the amount comes from here.
+  const sendCashTip = async (amount: string) => {
+    const amountCents = Math.round(Number(amount) * 100);
+    const user = auth.currentUser;
+    if (!user || user.isAnonymous || !activeSession) {
+      setNotice("Sign in to tip a live broadcaster.");
+      return;
+    }
+    try {
+      const response = await fetch("/api/live/tip-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
+        body: JSON.stringify({ sessionId: activeSession.sessionId, amountCents })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || typeof data.url !== "string") throw new Error(data.error || "Tip checkout could not be started.");
+      window.location.href = data.url;
+    } catch (error) {
+      setNotice(`${error instanceof Error ? error.message : "Tip checkout could not be started."} You were not charged.`);
+      setIsGiftSheetOpen(false);
+    }
   };
 
   const sendChat = (event: React.FormEvent<HTMLFormElement>) => {
@@ -554,7 +699,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
 
   const videoSurface = (broadcaster: Broadcaster, large = false, showChatOverlay = false) => (
     <div className={`relative isolate overflow-hidden bg-gradient-to-br ${broadcaster.theme} ${large ? "aspect-[4/5]" : "aspect-video"}`}>
-      {broadcaster.image && <img src={broadcaster.image} alt="" className="absolute inset-0 -z-10 h-full w-full object-cover opacity-75" />}
+      {broadcaster.image && <img src={broadcaster.image} alt="" loading="lazy" decoding="async" className="absolute inset-0 -z-10 h-full w-full object-cover opacity-75" />}
       <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_70%_22%,rgba(255,255,255,.28),transparent_24%),linear-gradient(180deg,transparent_35%,rgba(8,6,16,.78))]" />
       <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded bg-red-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />Live</div>
       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded bg-black/55 px-2 py-1 text-[11px] text-white backdrop-blur-sm"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div>
@@ -571,9 +716,9 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         <header className="flex items-center justify-between">{isLiveNow ? backButton(() => { if (myBroadcaster) setSelectedBroadcaster(myBroadcaster); setScreen("broadcast"); }, "Back to your live broadcast") : backButton(onExit, "Return to the Sanctuary")}<div className="text-center"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-teal-300">Celestial Sanctuary</p><h1 className="font-display text-xl font-semibold text-white">Live Circle</h1></div><button onClick={() => setScreen("setup")} aria-label="Go live" className="flex h-11 w-11 items-center justify-center rounded-full bg-mystic-gold text-[#100b1c] shadow-[0_0_22px_rgba(243,198,95,.18)] active:scale-95"><Video className="h-5 w-5" /></button></header>
         {notice && <p role="status" className="rounded-lg border border-mystic-gold/30 bg-mystic-gold/10 px-3 py-2 text-center text-xs text-mystic-gold">{notice}</p>}
         <button onClick={() => setScreen("setup")} className="flex w-full items-center justify-between rounded-xl border border-mystic-gold/40 bg-gradient-to-r from-mystic-gold/15 to-transparent px-4 py-3 text-left"><span><strong className="block font-display text-sm text-mystic-gold">Go live</strong><span className="text-xs text-slate-400">Start a broadcast with your community</span></span><ChevronRight className="h-5 w-5 text-mystic-gold" /></button>
-        <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator</button>}</div>
+        <section><div className="mb-3 flex items-end justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">Live now</p><h2 className="font-display text-lg text-white">Find your people</h2></div>{hasCreatorAccess && isAuthorizedReader && <button onClick={() => setScreen("earnings")} className="flex items-center gap-1 text-xs text-slate-400 hover:text-mystic-gold"><BarChart3 className="h-4 w-4" />Creator earnings</button>}</div>
           <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"><button onClick={() => setSelectedTopic("All")} className={`shrink-0 rounded-full border px-3 py-2 text-xs ${selectedTopic === "All" ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}>All</button>{topics.map(({ name, icon: Icon }) => <button key={name} onClick={() => setSelectedTopic(name)} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs ${selectedTopic === name ? "border-mystic-gold bg-mystic-gold text-[#100b1c]" : "border-white/10 bg-white/5 text-slate-300"}`}><Icon className="h-3.5 w-3.5" />{name}</button>)}</div>
-          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface(broadcaster)}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl) ? <img src={(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl)} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
+          <div className="grid gap-4 sm:grid-cols-2">{visibleBroadcasters.map((broadcaster) => <button key={broadcaster.id} onClick={() => { setSelectedBroadcaster(broadcaster); setViewerCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers); if (broadcaster.id === "your-live") { setScreen("broadcast"); } else { setChat(mockChat); setViewerReturn("directory"); setScreen("viewer"); } }} className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20] text-left transition-colors hover:border-mystic-gold/50">{videoSurface({ ...broadcaster, image: thumbnails[(broadcaster.id === "your-live" ? currentUserId : broadcaster.profileUid) ?? ""]?.url ?? DEFAULT_LIVE_THUMBNAIL })}<div className="flex items-center gap-3 p-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-mystic-gold/40 bg-[#39264a] font-display text-xs text-mystic-gold">{(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl) ? <img src={(broadcaster.id === "your-live" ? avatarUrl : broadcaster.avatarUrl)} alt="" className="h-full w-full object-cover" /> : broadcaster.avatar}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{broadcaster.id === "your-live" ? `Your Live · ${broadcaster.name}` : broadcaster.name}</div><p className="truncate text-xs text-slate-400">{broadcaster.title}</p></div><div className="flex items-center gap-1 text-xs text-slate-400"><Users className="h-3.5 w-3.5" />{formatCount(broadcaster.id === "your-live" ? viewerCount : broadcaster.viewers)}</div></div></button>)}{visibleBroadcasters.length === 0 && <p className="col-span-full py-10 text-center text-sm text-slate-400">No one is live in this topic right now.</p>}</div>
         </section>
       </section>
     );
@@ -588,6 +733,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Short description</span><textarea value={broadcastDescription} onChange={(event) => setBroadcastDescription(event.target.value)} maxLength={140} rows={2} placeholder="A little context for your viewers" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500 focus:border-mystic-gold/70" /></label>
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Hashtags / topics</span><input value={broadcastHashtags} onChange={(event) => setBroadcastHashtags(event.target.value)} maxLength={100} placeholder="#Tarot #Guidance" className="h-12 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-mystic-gold/70" /></label>
         <label className="block space-y-2"><span className="text-xs font-semibold text-slate-300">Topic</span><select value={broadcastTopic} onChange={(event) => setBroadcastTopic(event.target.value as LiveTopic)} className="h-12 w-full rounded-lg border border-white/10 bg-[#171122] px-3 text-sm text-white outline-none focus:border-mystic-gold/70">{topics.map(({ name }) => <option key={name} value={name}>{name}</option>)}</select></label>
+        <LiveThumbnailPicker defaultImage={DEFAULT_LIVE_THUMBNAIL} />
         <div className="border-y border-white/10 py-4"><h2 className="text-sm font-semibold text-white">Host profile</h2><p className="mt-1 text-xs text-slate-400">{readerProfile ? "Authorized Celestial Sanctuary Reader" : "Community host · Tarot broadcaster tools unavailable"}</p></div>
         <button onClick={startBroadcast} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-mystic-gold font-semibold text-[#100b1c] active:scale-[0.99]"><Video className="h-4 w-4" />Start Live</button>
       </section>
@@ -595,9 +741,52 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
   }
 
   if (screen === "earnings") {
-    const stats = [["Today's earnings", "$86.50"], ["This week", "$412.00"], ["This month", "$1,284.75"], ["Total earnings", "$8,640.25"], ["Tips", "$530.00"], ["Gift / Gem earnings", "$754.75"], ["Pending balance", "$145.00"], ["Available balance", "$1,139.75"]];
     return (
-      <section className="mx-auto max-w-lg space-y-5 pb-8 text-slate-100"><header className="flex items-center gap-3">{backButton(() => setScreen("directory"))}<div><p className="text-[10px] uppercase tracking-[0.18em] text-teal-300">Private creator view</p><h1 className="font-display text-xl text-white">Earnings overview</h1></div></header><div className="grid grid-cols-2 gap-x-5 gap-y-4 border-y border-white/10 py-5">{stats.map(([label, value]) => <div key={label}><p className="text-xs text-slate-400">{label}</p><strong className="mt-1 block font-display text-lg text-mystic-gold">{value}</strong></div>)}</div><section><h2 className="mb-3 text-sm font-semibold text-white">Payout history</h2><div className="divide-y divide-white/10">{[["Sep 28, 2026", "$240.00", "Paid"], ["Sep 14, 2026", "$185.50", "Paid"], ["Aug 31, 2026", "$312.00", "Paid"]].map(([date, amount, status]) => <div key={date} className="flex items-center justify-between py-3 text-sm"><span className="text-slate-300">{date}</span><span className="font-medium text-white">{amount}</span><span className="text-xs text-teal-300">{status}</span></div>)}</div></section><p className="text-xs text-slate-500">Example figures only. Payouts are not enabled.</p></section>
+      <section className="mx-auto max-w-3xl space-y-5 pb-8 text-slate-100">
+        <header className="flex items-center gap-3">
+          {backButton(() => setScreen("directory"))}
+          <div><p className="text-[10px] uppercase tracking-[0.18em] text-teal-300">Private broadcaster view</p><h1 className="font-display text-xl text-white">Gem earnings</h1></div>
+        </header>
+        <p className="rounded-xl border border-mystic-gold/20 bg-mystic-gold/[0.06] p-3 text-xs leading-relaxed text-slate-300">
+          These are virtual Gems from confirmed viewer gifts, not cash or withdrawable earnings. Purchased Gems are not included. Stripe cash tips are tracked separately.
+        </p>
+        <section aria-label="Cash tip payout setup" className="space-y-2 rounded-xl border border-white/10 bg-[#120d20] p-4 text-xs leading-relaxed text-slate-300">
+          <h2 className="font-display text-base text-white">Cash tip payouts</h2>
+          {payoutError ? <p role="alert" className="text-rose-300">{payoutError}</p> : !payout ? <p role="status" className="text-slate-400">Checking Stripe payout status…</p> : payout.ready ? <p className="text-teal-200">Stripe confirms your payout account is ready. Viewers can send cash tips.</p> : <p>Viewers cannot send cash tips until Stripe confirms your payout account. {payout.reason}</p>}
+          {payout && !payout.ready && <p className="text-slate-400">To set up or resume payouts, open Member → Payments &amp; Payouts.</p>}
+        </section>
+        {earningsLoading ? (
+          <div role="status" className="flex min-h-32 items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#120d20] text-sm text-slate-300"><RefreshCw className="h-4 w-4 animate-spin" />Loading verified tip earnings…</div>
+        ) : earningsError ? (
+          <div role="alert" className="space-y-3 rounded-xl border border-rose-400/25 bg-rose-950/20 p-4 text-sm text-rose-200"><p>{earningsError}</p><button onClick={() => setEarningsRefresh((n) => n + 1)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-rose-300/30 px-3 text-xs font-semibold hover:bg-rose-400/10"><RefreshCw className="h-3.5 w-3.5" />Retry</button></div>
+        ) : earnings && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                ["Total gems earned", earnings.totalGemsEarned],
+                ["Today", earnings.todayGemsEarned],
+                ["Lifetime gems earned", earnings.lifetimeGemsEarned],
+              ].map(([label, value]) => <div key={label} className="rounded-xl border border-mystic-gold/25 bg-gradient-to-br from-[#1d123a]/90 to-[#0a0618]/90 p-4"><p className="text-xs text-slate-400">{label}</p><strong className="mt-1 block font-display text-2xl text-mystic-gold">{value === null ? "Unavailable" : <>{formatCount(Number(value))}<span className="ml-1 text-sm font-normal">Gems</span></>}</strong></div>)}
+            </div>
+            {earnings.lifetimeGemsEarned !== null && earnings.totalGemsEarned !== earnings.lifetimeGemsEarned && <p className="text-[11px] leading-relaxed text-slate-500">The lifetime total includes verified legacy gift totals. Individual viewer records are available for gifts recorded in the transaction history.</p>}
+            <section className="overflow-hidden rounded-xl border border-white/10 bg-[#120d20]">
+              <div className="border-b border-white/10 px-4 py-3"><h2 className="font-display text-base text-white">Viewer gift history</h2><p className="mt-1 text-[11px] text-slate-400">Confirmed virtual-Gem gifts only.</p></div>
+              {earnings.transactions.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-slate-400">{(earnings.lifetimeGemsEarned ?? 0) > 0 ? "The lifetime aggregate includes earlier verified gifts, but individual viewer records are not available for those gifts." : "No verified viewer Gem tips yet. Earnings will appear here after a gift is confirmed."}</p>
+              ) : (
+                <div className="divide-y divide-white/10">
+                  {earnings.transactions.map((item) => <div key={item.id} className="grid grid-cols-2 gap-2 px-4 py-3 text-sm sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto_auto] sm:items-center">
+                    <span className="col-span-2 min-w-0 truncate font-medium text-white sm:col-span-1">{item.viewerName}</span>
+                    <span className="text-xs text-slate-400">{new Date(item.date).toLocaleString()}</span>
+                    <strong className="text-right text-teal-200">+{formatCount(item.gemsAmount)} Gems</strong>
+                    <span className="col-span-2 text-[10px] capitalize text-slate-500 sm:col-span-1 sm:text-right">{item.status}</span>
+                  </div>)}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </section>
     );
   }
 
@@ -634,7 +823,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         onViewMemberProfile={onViewMemberProfile}
         isPaused={isBroadcaster ? isBroadcastPaused : Boolean(activeRemote?.isPaused)}
         canUseTarot={canUseTarot}
-        currentRank={currentRank.name}
+        broadcasterRank={broadcasterRank}
         elapsedSeconds={elapsedSeconds}
         viewerCount={viewerCount}
         giftsReceived={giftsReceived}
@@ -642,9 +831,9 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         readingSpread={isBroadcaster ? readingSpread : activeRemote?.spread ?? "three"}
         readingCards={isBroadcaster ? liveReading : remoteReadingCards}
         showInterpretations={isBroadcaster ? showInterpretations : activeRemote?.showInterpretations ?? true}
+        isBookDisplay={!isBroadcaster && Boolean(activeRemote?.cards.some((entry) => entry.book))}
         onBrowse={() => setScreen("directory")}
         onStartBroadcast={() => setScreen("setup")}
-        onEarnings={() => setScreen("earnings")}
         onEndBroadcast={endBroadcast}
         onTogglePause={() => setIsBroadcastPaused((paused) => !paused)}
         onUpdateBroadcastInfo={(title, description, hashtags) => {
@@ -665,6 +854,7 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         onStartReading={startLiveReading}
         onDrawSelectedCards={startSelectedLiveReading}
         onFlipLiveCard={revealLiveCard}
+        onBookReadingChange={setBookReading}
         onRevealNext={revealNextLiveCard}
         onRevealAll={revealAllLiveCards}
         onResetReading={resetLiveReading}
@@ -695,6 +885,8 @@ export default function LiveCommunity({ onExit, isAuthorizedReader, currentUserI
         viewerGems={viewerGems}
         onSendGift={sendGift}
         onSendCashTip={sendCashTip}
+        cashTipsEnabled={cashTips.enabled}
+        cashTipsMessage={cashTips.message}
         customTip={customTip}
         setCustomTip={setCustomTip}
         isGiftSheetOpen={isGiftSheetOpen}
