@@ -9,6 +9,42 @@ export const PLATFORM_FEE_RATE = 0.2;
 export const TIP_MIN_CENTS = 100;
 export const TIP_MAX_CENTS = 50000;
 
+export function checkoutBaseUrl(input: {
+  appUrl?: string;
+  codespaceName?: string;
+  forwardingDomain?: string;
+  port?: number;
+  origin?: string;
+  host?: string;
+  protocol?: string;
+}): string {
+  const codespaceOrigin = input.codespaceName
+    ? `https://${input.codespaceName}-${input.port || 3000}.${input.forwardingDomain || "app.github.dev"}`
+    : "";
+  const value = input.appUrl || codespaceOrigin || input.origin ||
+    (input.host ? `${input.protocol || "http"}://${input.host}` : "");
+  if (!value) throw new Error("Application URL is not configured.");
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+      url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Application URL must be an HTTP(S) origin without a path, credentials, query, or fragment.");
+  }
+  if (input.codespaceName && (url.protocol !== "https:" || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname))) {
+    throw new Error("Codespaces payments require a public HTTPS APP_URL, not localhost.");
+  }
+  return url.origin;
+}
+
+export function liveTipReturnUrls(baseUrl: string): { success_url: string; cancel_url: string } {
+  const url = new URL(baseUrl);
+  const host = url.hostname;
+  if (url.protocol !== "https:" || host === "localhost" || host.endsWith(".localhost") ||
+      host === "[::1]" || host.startsWith("127.") || host.endsWith(".local")) {
+    throw new Error("Live tips require a public HTTPS application origin. Configure APP_URL and restart the server.");
+  }
+  return { success_url: `${url.origin}/?tip=success`, cancel_url: `${url.origin}/?tip=cancel` };
+}
+
 // Accepts only whole US-dollar-cent integers inside the allowed range; anything else is rejected, never rounded.
 export function parseTipAmountCents(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) return null;

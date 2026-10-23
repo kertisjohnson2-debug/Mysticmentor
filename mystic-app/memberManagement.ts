@@ -47,6 +47,7 @@ export function registerAccountRestrictions(app: express.Express, db: Firestore)
 export function registerMemberManagement(app: express.Express, db: Firestore, adminGuard: Guard, memberGuard: Guard) {
   app.get("/api/admin/members/:uid/email-consent", async (req, res) => {
     if (!(await adminGuard(req, res))) return;
+    res.setHeader("Cache-Control", "no-store");
     const uid = req.params.uid;
     const after = req.query.after;
     if (typeof uid !== "string" || !SAFE_ID.test(uid) ||
@@ -66,7 +67,6 @@ export function registerMemberManagement(app: express.Express, db: Firestore, ad
       }
       const snapshot = await query.get();
       const page = snapshot.docs.slice(0, 25);
-      res.setHeader("Cache-Control", "no-store");
       return res.json({
         current: readEmailConsent(current.data()),
         history: page.map((item) => {
@@ -125,6 +125,7 @@ export function registerMemberManagement(app: express.Express, db: Firestore, ad
   app.get("/api/members/me/email-consent", async (req, res) => {
     const uid = await memberGuard(req, res);
     if (!uid) return;
+    res.setHeader("Cache-Control", "no-store");
     try {
       return res.json(readEmailConsent((await db.collection("memberEmailConsent").doc(uid).get()).data()));
     } catch (error) {
@@ -136,6 +137,7 @@ export function registerMemberManagement(app: express.Express, db: Firestore, ad
   app.post("/api/members/me/email-consent", async (req, res) => {
     const uid = await memberGuard(req, res);
     if (!uid) return;
+    res.setHeader("Cache-Control", "no-store");
     const { consented, onboarding, termsAccepted, termsVersion, privacyVersion } = req.body ?? {};
     if (typeof consented !== "boolean" || (onboarding !== undefined && typeof onboarding !== "boolean") ||
         (onboarding === true && termsAccepted !== true)) {
@@ -180,11 +182,19 @@ export function registerMemberManagement(app: express.Express, db: Firestore, ad
     const search = req.query.search ?? "";
     const searchBy = req.query.searchBy ?? "email";
     if (after !== undefined && (typeof after !== "string" || !SAFE_ID.test(after))) return res.status(400).json({ error: "Invalid member cursor." });
-    if (typeof search !== "string" || search.length > 100 || typeof searchBy !== "string" || !["email", "displayName"].includes(searchBy)) return res.status(400).json({ error: "Invalid member search." });
+    if (typeof search !== "string" || search.length > 100 || typeof searchBy !== "string" ||
+        !["email", "displayName", "role", "status"].includes(searchBy)) return res.status(400).json({ error: "Invalid member search." });
+    if (searchBy === "role" && search && !["admin", "member"].includes(search)) return res.status(400).json({ error: "Choose a supported member role." });
+    if (searchBy === "status" && search && !["suspended", "banned"].includes(search)) return res.status(400).json({ error: "Choose a supported account status." });
     try {
+      const users = db.collection("users");
       let query = search && searchBy === "displayName"
-        ? db.collection("users").orderBy("displayName").orderBy(FieldPath.documentId()).startAt(search).endAt(`${search}\uf8ff`).limit(51)
-        : (search ? db.collection("users").where("email", "==", search.trim().toLowerCase()) : db.collection("users")).orderBy(FieldPath.documentId()).limit(51);
+        ? users.orderBy("displayName").orderBy(FieldPath.documentId()).startAt(search).endAt(`${search}\uf8ff`).limit(51)
+        : search && searchBy === "role"
+          ? users.where("role", "==", search).orderBy(FieldPath.documentId()).limit(51)
+          : search && searchBy === "status"
+            ? users.where(search, "==", true).orderBy(FieldPath.documentId()).limit(51)
+            : (search ? users.where("email", "==", search.trim().toLowerCase()) : users).orderBy(FieldPath.documentId()).limit(51);
       if (typeof after === "string") {
         if (search && searchBy === "displayName") {
           const cursor = await db.collection("users").doc(after).get();

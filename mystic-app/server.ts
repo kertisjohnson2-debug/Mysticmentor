@@ -29,7 +29,7 @@ import { registerAdminPanel } from "./adminPanel";
 import { registerAccountRestrictions, registerMemberManagement } from "./memberManagement";
 import { registerAffirmationSpins } from "./affirmationSpins";
 import { readDailyHoroscope } from "./src/lib/dailyContent";
-import { calculateTipSplit, evaluateConnectReadiness, parseTipAmountCents, summarizePendingTips, summarizeReceivedTips } from "./payments";
+import { calculateTipSplit, checkoutBaseUrl, evaluateConnectReadiness, liveTipReturnUrls, parseTipAmountCents, summarizePendingTips, summarizeReceivedTips } from "./payments";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -875,7 +875,10 @@ async function startServer() {
     }
   });
 
-  registerAdminPanel(app, db, requireAdminSession);
+  registerAdminPanel(app, db, requireAdminSession, {
+    projectId: firebaseConfig.projectId,
+    firestoreDatabaseId: firebaseConfig.firestoreDatabaseId
+  });
   registerMemberManagement(app, db, requireAdminSession, authenticateMember);
   registerAffirmationSpins(app, db, (req, res) => authenticateMember(req, res, false));
 
@@ -1816,6 +1819,16 @@ async function startServer() {
     }
   });
 
+  const stripeBaseUrl = (req: express.Request) => checkoutBaseUrl({
+    appUrl: process.env.APP_URL,
+    codespaceName: process.env.CODESPACE_NAME,
+    forwardingDomain: process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN,
+    port: Number(process.env.PORT) || 3000,
+    origin: req.headers.origin,
+    host: req.get("host"),
+    protocol: req.protocol,
+  });
+
   // --- API: CREATE CHECKOUT SESSION (GEMS PURCHASE) ---
   app.post("/api/create-gem-checkout-session", async (req, res) => {
     const { packageId } = req.body || {};
@@ -1840,10 +1853,7 @@ async function startServer() {
       const transactionId = "tx_sess_" + crypto.randomUUID();
 
       if (isStripeConfigured) {
-        const baseUrl = (process.env.APP_URL || (req.headers.origin as string) || "").replace(/\/$/, "");
-        if (!baseUrl) {
-          return res.status(500).json({ error: "Application URL is not configured." });
-        }
+        const baseUrl = stripeBaseUrl(req);
         const session = await stripe.checkout.sessions.create({
           payment_method_types: ["card"],
           line_items: [
@@ -1886,16 +1896,6 @@ async function startServer() {
   });
 
   // --- STRIPE CONNECT: broadcasters link a payout account; the account id is stored server-side only ---
-  const stripeBaseUrl = (req: express.Request) => {
-    const envUrl = process.env.APP_URL;
-    if (envUrl) return envUrl.replace(/\/$/, "");
-    const origin = req.headers.origin as string;
-    if (origin) return origin.replace(/\/$/, "");
-    const host = req.get("host");
-    if (host) return `${req.protocol || "http"}://${host}`.replace(/\/$/, "");
-    return "";
-  };
-
   // Ids created by the old local simulator (acct_sim_*) are not real Stripe accounts.
   const isRealConnectId = (id: unknown): id is string => typeof id === "string" && id.startsWith("acct_") && !id.startsWith("acct_sim_");
 
@@ -2117,6 +2117,7 @@ async function startServer() {
       const baseUrl = stripeBaseUrl(req);
       if (!baseUrl) return res.status(500).json({ error: "Application URL is not configured." });
 
+      const returnUrls = liveTipReturnUrls(baseUrl);
       const readiness = target.accountId ? await retrieveConnectReadiness(target.accountId) : evaluateConnectReadiness(null);
       if (!readiness.ready) return res.status(409).json({ error: "This broadcaster has not finished payout setup, so paid tips are unavailable." });
 
@@ -2135,8 +2136,7 @@ async function startServer() {
         line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: amountCents, product_data: { name: `Tip for ${target.recipientName}`, description: "Livestream tip" } } }],
         payment_intent_data: { application_fee_amount: platformFeeCents, transfer_data: { destination: target.accountId }, metadata },
         metadata,
-        success_url: `${baseUrl}/?tip=success`,
-        cancel_url: `${baseUrl}/?tip=cancel`,
+        ...returnUrls,
       }, { idempotencyKey: `live-tip-${tipId}` });
       await tipRef.update({ stripeSessionId: session.id });
       return res.json({ url: session.url });
@@ -2419,48 +2419,47 @@ async function startServer() {
     const verifiedGemsAmount = pkg.gems;
     const verifiedCost = pkg.cost;
 
+    let decodedToken: DecodedIdToken;
     try {
-      // Securely verify Firebase ID Token
-      const decodedToken = await getAuth().verifyIdToken(idToken);
-      const authenticatedUid = decodedToken.uid;
+      decodedToken = await getAuth().verifyIdToken(idToken);
+    } catch {
+      return res.status(401).json({ error: "Invalid ID token." });
+    }
+    const authenticatedUid = decodedToken.uid;
+    if (authenticatedUid !== userId) {
+      return res.status(403).json({ error: "You can only simulate purchases for your own account." });
+    }
 
-      // Ensure the logged-in user can only simulate purchases for their own account
-      if (authenticatedUid !== userId) {
-        return res.status(403).json({ error: "Forbidden: You can only simulate purchases for your own account" });
-      }
-
-      // Simulate Stripe Webhook Payload with verified server-side values
-      const mockWebhookEvent = {
-        id: "evt_sim_" + crypto.randomUUID(),
-        object: "event",
-        api_version: "2023-10-16",
-        created: Math.floor(Date.now() / 1000),
-        type: "checkout.session.completed",
-        data: {
-          object: {
-            id: session_id,
-            object: "checkout.session",
-            amount_total: Math.round(Number(verifiedCost) * 100),
-            currency: "usd",
-            payment_status: "paid",
-            metadata: {
-              userId: authenticatedUid,
-              packageId,
-              gemsAmount: verifiedGemsAmount.toString(),
-              cost: verifiedCost.toString(),
-              type: "gem_purchase",
-              transactionId: session_id,
-            },
+    const mockWebhookEvent = {
+      id: "evt_sim_" + crypto.randomUUID(),
+      object: "event",
+      api_version: "2023-10-16",
+      created: Math.floor(Date.now() / 1000),
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: session_id,
+          object: "checkout.session",
+          amount_total: Math.round(Number(verifiedCost) * 100),
+          currency: "usd",
+          payment_status: "paid",
+          metadata: {
+            userId: authenticatedUid,
+            packageId,
+            gemsAmount: verifiedGemsAmount.toString(),
+            cost: verifiedCost.toString(),
+            type: "gem_purchase",
+            transactionId: session_id,
           },
         },
-      };
-
-      // Trigger Webhook Event logic synchronously
+      },
+    };
+    try {
       await processStripeEvent(mockWebhookEvent as any);
       return res.json({ success: true, eventId: mockWebhookEvent.id });
-    } catch (error: any) {
+    } catch (error) {
       console.error("[Simulate Webhook Error]:", error);
-      return res.status(401).json({ error: "Unauthorized access or validation failure" });
+      return res.status(500).json({ error: "Simulated payment could not be confirmed. No payment success was reported." });
     }
   });
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { 
   auth, 
@@ -93,6 +93,8 @@ import AdminMembers from "./components/AdminMembers";
 import AdminReports from "./components/AdminReports";
 import AdminGemsRewards from "./components/AdminGemsRewards";
 import AdminRevenue from "./components/AdminRevenue";
+import AdminRankings from "./components/AdminRankings";
+import AdminDiagnostics from "./components/AdminDiagnostics";
 import RegistrationConsent from "./components/RegistrationConsent";
 import { emailPreferenceRequest } from "./lib/emailPreference";
 import MemberProfile from "./components/MemberProfile";
@@ -114,6 +116,13 @@ import type { UserIdentity } from "./types/userProfile";
 import COSMIC_BACKDROP from "./assets/images/cosmic_tarot_backdrop_1790704955137.jpg";
 import CARD_BACK_IMG from "./assets/images/mystical_card_back_1790704964638.jpg";
 import TAROT_READER_IMG from "./assets/images/mystical_tarot_reader_1790704974614.jpg";
+
+const isFirestoreQuotaError = (error: unknown) => {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const message = error instanceof Error ? error.message : "";
+  return code === 8 || code === "8" || code === "resource-exhausted" ||
+    /RESOURCE_EXHAUSTED|Free daily read units|Quota limit exceeded/i.test(message);
+};
 
 async function ensureServerProfile(user: { getIdToken: () => Promise<string> }, displayName?: string | null): Promise<any | null> {
   const token = await user.getIdToken();
@@ -201,10 +210,15 @@ export default function App() {
   const [emailOptIn, setEmailOptIn] = useState(false);
   const [registrationPending, setRegistrationPending] = useState(false);
   const [registrationSaving, setRegistrationSaving] = useState(false);
+  const [sandboxPaymentBusy, setSandboxPaymentBusy] = useState(false);
+  const [sandboxPaymentError, setSandboxPaymentError] = useState("");
+  const sandboxPaymentInFlight = useRef(false);
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authSuccessMsg, setAuthSuccessMsg] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [profileLoadFailed, setProfileLoadFailed] = useState(false);
+  const [profileReadQuotaBlocked, setProfileReadQuotaBlocked] = useState(false);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState("");
   const [profileSaveMessage, setProfileSaveMessage] = useState("");
@@ -251,7 +265,7 @@ export default function App() {
   useEffect(() => {
     let active = true;
     setServerAdminIdentity(null); setAdminDiscoveryError("");
-    if (!currentUser || currentUser.isAnonymous) return;
+    if (!currentUser || currentUser.isAnonymous || isAuthLoading || dbUserDoc || !profileLoadFailed || profileReadQuotaBlocked) return;
     const user = currentUser;
     const discover = async () => {
       try {
@@ -268,7 +282,7 @@ export default function App() {
     };
     void discover();
     return () => { active = false; };
-  }, [currentUser, adminDiscoveryRetry]);
+  }, [currentUser, dbUserDoc, isAuthLoading, profileLoadFailed, profileReadQuotaBlocked, adminDiscoveryRetry]);
   const isAdminAccount = Boolean(
     currentUser && !currentUser.isAnonymous && dbUserDoc?.suspended !== true && dbUserDoc?.banned !== true && (
       (dbUserDoc?.role === "admin" && dbUserDoc?.suspended !== true) ||
@@ -276,43 +290,8 @@ export default function App() {
       (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified)
     )
   );
-  const [financialStats, setFinancialStats] = useState<any>({
-    totalGrossVolume: 0,
-    totalPlatformRevenue: 0,
-    totalTransfers: 0,
-    purchaseCount: 0
-  });
+  const [financialStats, setFinancialStats] = useState<Record<string, unknown> | null>(null);
   const [financialRecords, setFinancialRecords] = useState<any[]>([]);
-
-  const monthlyGrossHistory = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const r of financialRecords) {
-      if (r.type !== "gem_purchase" && r.type !== "tip") continue;
-      const amount = Number(r.amount);
-      const date = r.createdAt ? new Date(r.createdAt) : null;
-      if (!date || isNaN(date.getTime()) || !Number.isFinite(amount)) continue;
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      totals.set(key, (totals.get(key) ?? 0) + amount);
-    }
-    return Array.from(totals.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-6)
-      .map(([key, total]) => ({
-        key,
-        total,
-        label: new Date(`${key}-01T00:00:00`).toLocaleString(undefined, { month: "short" })
-      }));
-  }, [financialRecords]);
-  const maxMonthlyGross = Math.max(1, ...monthlyGrossHistory.map((m) => m.total));
-  const gemsCredited = financialRecords
-    .filter((r) => r.type === "gem_purchase")
-    .reduce((sum, r) => sum + (Number(r.gemsAmount) || 0), 0);
-  const todayGross = useMemo(() => {
-    const today = new Date().toDateString();
-    return financialRecords
-      .filter((r) => (r.type === "gem_purchase" || r.type === "tip") && r.createdAt && new Date(r.createdAt).toDateString() === today)
-      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-  }, [financialRecords]);
 
   // --- TAROT SPREAD STATE ---
   const [tarotTopic, setTarotTopic] = useState("General Guidance");
@@ -512,36 +491,81 @@ export default function App() {
 
   // --- REAL-TIME FIREBASE AUTH & DATABASE SUBSCRIPTIONS ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let active = true;
+    let authGeneration = 0;
+    let unsubscribeUserProfile: (() => void) | undefined;
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      const generation = ++authGeneration;
+      unsubscribeUserProfile?.();
+      unsubscribeUserProfile = undefined;
       setIsAuthLoading(true);
       // Anonymous Live viewers are not app members: no profile, no member state
       if (user && !user.isAnonymous) {
         setCurrentUser(user);
-        
-        // Fetch or create user record in Firestore
-        const userDocRef = doc(db, "users", user.uid);
-        try {
-          const docSnap = await getDoc(userDocRef);
-          if (!docSnap.exists()) {
-            // The server creates the profile with the trusted starting balance
-            const created = await ensureServerProfile(user, user.displayName || authDisplayName);
-            if (created) setDbUserDoc(created);
-          } else {
-            setDbUserDoc(docSnap.data());
-          }
-        } catch (error) {
-          console.error("Failed to fetch or establish user profile:", error);
-        }
+        setDbUserDoc(null);
+        setProfileLoadFailed(false);
+        setProfileReadQuotaBlocked(false);
+        const isCurrentUser = () => active && authGeneration === generation;
+        let initialSnapshotHandled = false;
+        let profileCreation: Promise<void> | null = null;
+        unsubscribeUserProfile = onSnapshot(doc(db, "users", user.uid), (snapshot) => {
+          void (async () => {
+            if (!isCurrentUser()) return;
+            if (snapshot.exists()) {
+              const data = snapshot.data();
+              setDbUserDoc(data);
+              if (data.suspended === true || data.banned === true) {
+                alert("Your account has been suspended or banned. Please contact Mysticmentor support.");
+                void signOut(auth);
+              } else if (data.role !== "admin" && !(user.email === "kertisjohnson7@gmail.com" && user.emailVerified)) {
+                setIsAdminAuthenticated(false);
+                setAdminSession(null);
+              }
+            } else {
+              profileCreation ??= (async () => {
+                try {
+                  const created = await ensureServerProfile(user, user.displayName || authDisplayName);
+                  if (!isCurrentUser()) return;
+                  if (created) setDbUserDoc(created);
+                  else setProfileLoadFailed(true);
+                } catch (error) {
+                  if (!isCurrentUser()) return;
+                  setProfileLoadFailed(true);
+                  setProfileReadQuotaBlocked(isFirestoreQuotaError(error));
+                  console.error("Failed to establish user profile:", error);
+                }
+              })();
+              await profileCreation;
+            }
+            if (!initialSnapshotHandled && isCurrentUser()) {
+              initialSnapshotHandled = true;
+              setIsAuthLoading(false);
+            }
+          })();
+        }, (error) => {
+          if (!isCurrentUser()) return;
+          setProfileLoadFailed(true);
+          setProfileReadQuotaBlocked(isFirestoreQuotaError(error));
+          setIsAuthLoading(false);
+          console.error("Failed to sync user document real-time:", error);
+        });
       } else {
         setCurrentUser(null);
         setDbUserDoc(null);
+        setProfileLoadFailed(false);
+        setProfileReadQuotaBlocked(false);
         setIsAdminAuthenticated(false);
         setAdminSession(null);
+        setIsAuthLoading(false);
       }
-      setIsAuthLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      authGeneration += 1;
+      unsubscribeUserProfile?.();
+      unsubscribeAuth();
+    };
   }, []);
 
   useEffect(() => {
@@ -549,36 +573,6 @@ export default function App() {
     setActiveTab(currentUser ? "profile" : "dashboard");
     setPendingMemberNavigation(false);
   }, [pendingMemberNavigation, isAuthLoading, currentUser]);
-
-  // Listen for real-time user document changes to update gem balances and roles
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const userDocRef = doc(db, "users", currentUser.uid);
-    const unsubscribe = onSnapshot(userDocRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setDbUserDoc(data);
-
-        // Suspended members are signed out; Firestore rules also block their profile writes and Tarot access
-        if (data.suspended === true || data.banned === true) {
-          alert("Your account has been suspended or banned. Please contact Mysticmentor support.");
-          signOut(auth);
-          return;
-        }
-
-        // Losing the admin role locks the Admin panel immediately; access is never auto-granted here.
-        if (data.suspended === true || !(data.role === "admin" || (currentUser.email === "kertisjohnson7@gmail.com" && currentUser.emailVerified))) {
-          setIsAdminAuthenticated(false);
-          setAdminSession(null);
-        }
-      }
-    }, (error) => {
-      console.error("Failed to sync user document real-time:", error);
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
 
   // Sync userGems state with dbUserDoc.gemBalance when authenticated
   useEffect(() => {
@@ -653,6 +647,7 @@ export default function App() {
 
   const [adminDataError, setAdminDataError] = useState("");
   const [adminDataLoaded, setAdminDataLoaded] = useState(false);
+  const [adminDataLoading, setAdminDataLoading] = useState(false);
   const [memberCount, setMemberCount] = useState<number | null>(null);
   const [staffTruncated, setStaffTruncated] = useState(false);
   const [adminRefresh, setAdminRefresh] = useState(0);
@@ -660,16 +655,18 @@ export default function App() {
   // Privileged data is fetched only through the server's role + PIN-session guard.
   useEffect(() => {
     if (!isAdminAuthenticated) {
+      setAdminDataLoading(false);
       setAdminDataLoaded(false);
       setMemberCount(null);
       setStaffList([]);
       setTarotReaderList([]);
       setFinancialRecords([]);
-      setFinancialStats({});
+      setFinancialStats(null);
       return;
     }
     let cancelled = false;
     const refresh = async () => {
+      setAdminDataLoading(true);
       try {
         const data = await loadAdminPanel();
         if (cancelled) return;
@@ -677,7 +674,7 @@ export default function App() {
         setStaffTruncated(data.staffTruncated);
         setStaffList(data.members.filter((member) => member.role === "admin"));
         setTarotReaderList(data.members.filter((member) => member.tarotReader === true));
-        setFinancialStats(data.financials ?? {});
+        setFinancialStats(data.financials ?? null);
         setFinancialRecords(data.records);
         setAdminDataError("");
         setAdminDataLoaded(true);
@@ -686,12 +683,13 @@ export default function App() {
         setAdminDataError(error instanceof Error ? error.message : "Could not load admin data.");
         setAdminDataLoaded(false);
         setMemberCount(null);
-        setStaffList([]); setTarotReaderList([]); setFinancialRecords([]); setFinancialStats({});
+        setStaffList([]); setTarotReaderList([]); setFinancialRecords([]); setFinancialStats(null);
+      } finally {
+        if (!cancelled) setAdminDataLoading(false);
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 30_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => { cancelled = true; };
   }, [isAdminAuthenticated, adminRefresh]);
 
   useEffect(() => {
@@ -1365,12 +1363,15 @@ export default function App() {
     const packageId = queryParams.get("packageId");
 
     const handleAuthorizeSimulatedPayment = async () => {
+      if (sandboxPaymentInFlight.current) return;
+      sandboxPaymentInFlight.current = true;
+      setSandboxPaymentBusy(true);
+      setSandboxPaymentError("");
       try {
         const idToken = await auth.currentUser?.getIdToken();
+        if (!idToken) throw new Error("Sign in again before authorizing this simulated payment.");
         const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (idToken) {
-          headers["Authorization"] = `Bearer ${idToken}`;
-        }
+        headers["Authorization"] = `Bearer ${idToken}`;
 
         const res = await fetch("/api/simulate-webhook-success", {
           method: "POST",
@@ -1383,14 +1384,17 @@ export default function App() {
             packageId
           })
         });
-        const data = await res.json();
-        if (data.success) {
-          window.location.href = `/dashboard?payment=success&tx=${sessionId}`;
-        } else {
-          alert("Simulation failed.");
+        const data = await res.json().catch(() => null);
+        if (!res.ok || data?.success !== true) {
+          throw new Error(typeof data?.error === "string" ? data.error : `Payment could not be confirmed (${res.status}).`);
         }
-      } catch (err) {
-        console.error(err);
+        window.location.href = `/dashboard?payment=success&tx=${sessionId}`;
+      } catch (error) {
+        console.error("Simulated payment was not confirmed:", error);
+        setSandboxPaymentError(error instanceof Error ? error.message : "Payment could not be confirmed. No success was reported.");
+      } finally {
+        sandboxPaymentInFlight.current = false;
+        setSandboxPaymentBusy(false);
       }
     };
 
@@ -1425,16 +1429,21 @@ export default function App() {
             </div>
           </div>
 
+          {sandboxPaymentError && <p role="alert" className="text-xs text-red-300">{sandboxPaymentError}</p>}
           <div className="flex gap-3">
             <button
+              type="button"
+              disabled={sandboxPaymentBusy}
               onClick={handleAuthorizeSimulatedPayment}
-              className="flex-1 py-2.5 rounded-lg bg-mystic-gold text-black font-bold text-xs uppercase cursor-pointer text-center"
+              className="flex-1 py-2.5 rounded-lg bg-mystic-gold text-black font-bold text-xs uppercase cursor-pointer text-center disabled:opacity-50"
             >
-              Authorize Payment
+              {sandboxPaymentBusy ? "Confirming payment..." : "Authorize Payment"}
             </button>
             <button
+              type="button"
+              disabled={sandboxPaymentBusy}
               onClick={() => { window.location.href = `/dashboard?payment=cancel`; }}
-              className="px-4 py-2.5 rounded-lg border border-[#2c1654] text-slate-300 text-xs cursor-pointer hover:bg-white/5"
+              className="px-4 py-2.5 rounded-lg border border-[#2c1654] text-slate-300 text-xs cursor-pointer hover:bg-white/5 disabled:opacity-50"
             >
               Cancel
             </button>
@@ -3260,6 +3269,15 @@ export default function App() {
           {activeTab === "admin" && isAdminAuthenticated && (
             <div className="space-y-6 fade-in text-left">
               {adminDataError && <p role="alert" className="rounded-lg border border-red-400/40 p-3 text-xs text-red-300">{adminDataError}</p>}
+              <div className="flex items-center justify-between gap-3">
+                <p role="status" aria-live="polite" className="text-[10px] text-slate-500">
+                  {adminDataLoading ? "Refreshing protected Admin data..." : adminDataLoaded ? "Admin data loaded. Refresh on demand to limit Firestore reads." : "Admin data has not loaded."}
+                </p>
+                <button type="button" disabled={adminDataLoading} onClick={() => setAdminRefresh((value) => value + 1)}
+                  className="min-h-11 touch-manipulation rounded-lg border border-white/20 px-3 text-xs text-slate-200 disabled:opacity-50">
+                  {adminDataLoading ? "Loading..." : "Refresh Admin data"}
+                </button>
+              </div>
               {selectedMemberProfile && (
                 <MemberProfile
                   member={selectedMemberProfile}
@@ -3452,14 +3470,8 @@ export default function App() {
               {adminSubTab === "reports" && <AdminReports />}
               {adminSubTab === "rewards" && <AdminGemsRewards />}
               {adminSubTab === "revenue" && <AdminRevenue />}
-              {(adminSubTab === "rankings" || adminSubTab === "diagnostics") && (
-                <section aria-labelledby="admin-placeholder-heading" className="rounded-xl border border-[#2c1654] bg-[#120a26]/40 p-4 text-left">
-                  <h3 id="admin-placeholder-heading" className="text-sm font-bold text-white">
-                    {adminSubTab === "rankings" ? "Broadcaster Rankings" : "Diagnostics"}
-                  </h3>
-                  <p className="mt-2 text-xs text-slate-400">Admin-only section placeholder. No new data access or operations are implemented in this phase.</p>
-                </section>
-              )}
+              {adminSubTab === "rankings" && <AdminRankings />}
+              {adminSubTab === "diagnostics" && <AdminDiagnostics session={adminSession} />}
 
               {adminSubTab === "images" && <AdminImageControls />}
               {adminSubTab === "security" && (
@@ -3556,46 +3568,9 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Compounding Earnings Stats */}
-                  <div className="grid grid-cols-3 gap-2 font-mono">
-                    <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
-                      <span className="text-[8px] text-slate-400 uppercase block mb-1">Today's Gross</span>
-                      <span className="text-sm font-bold text-white tabular-nums">${todayGross.toFixed(2)}</span>
-                    </div>
-                    <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
-                      <span className="text-[8px] text-slate-400 uppercase block mb-1">Archived Inquiries</span>
-                      <span className="text-sm font-bold text-teal-400 tabular-nums">0</span>
-                    </div>
-                    <div className="bg-[#120a26] p-3 rounded-xl text-center border border-[#2c1654]">
-                      <span className="text-[8px] text-slate-400 uppercase block mb-1">Gems Credited</span>
-                      <span className="text-sm font-bold text-mystic-gold tabular-nums">{gemsCredited}g</span>
-                    </div>
-                  </div>
-
-                  {/* Monthly Compounding revenue graph */}
-                  <div className="p-4 rounded-xl bg-black/40 border border-[#2c1654]/40 space-y-2 text-left">
-                    <span className="text-[9px] font-mono text-slate-400 uppercase block font-bold">
-                      Revenue History (Gross Volume by Month, Recent Ledger Records)
-                    </span>
-
-                    {monthlyGrossHistory.length === 0 ? (
-                      <div className="h-24 flex items-center justify-center text-center text-[10px] text-slate-500 italic bg-black/40 rounded border border-dashed border-[#2c1654]/40 px-3">
-                        No revenue history yet. Monthly totals will appear once payments are recorded.
-                      </div>
-                    ) : (
-                      <div className="h-24 flex items-end justify-between px-3 bg-black/40 rounded border border-[#2c1654]/40 pt-4">
-                        {monthlyGrossHistory.map((m) => (
-                          <div key={m.key} className="flex flex-col items-center flex-1 space-y-1">
-                            <span className="text-[7px] text-teal-300 font-mono">${m.total.toFixed(2)}</span>
-                            <div
-                              className="w-8 bg-gradient-to-t from-[#2c1654] to-mystic-gold rounded-t transition-all duration-1000"
-                              style={{ height: `${Math.max(2, Math.round((m.total / maxMonthlyGross) * 48))}px` }}
-                            />
-                            <span className="text-[8px] text-slate-500 uppercase">{m.label}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                  <div className="rounded-xl border border-amber-400/30 bg-amber-950/10 p-4 text-[10px] text-amber-100">
+                    Live earnings, archived inquiry counts, and monthly totals are unavailable here. The Admin bundle only includes a bounded recent ledger page, so it cannot support complete time-based aggregates.
+                    Use Financials or Revenue for the stored records; neither page represents independently reconciled Stripe settlement.
                   </div>
 
                   {/* Client waiting list */}
@@ -4193,15 +4168,20 @@ export default function App() {
               {adminSubTab === "financials" && (
                 <div className="space-y-5 fade-in text-left text-xs">
                   
+                  <p className="rounded-xl border border-amber-400/30 bg-amber-950/10 p-3 text-[10px] text-amber-100">
+                    These are stored legacy aggregates and may include simulated activity. They are not verified cash receipts, settled payouts, or a complete reconciliation. Missing or invalid values are shown as unavailable.
+                  </p>
+
                   {/* Summary Cards */}
                   <div className="grid grid-cols-2 gap-3.5">
                     <div className="bg-[#120a26]/80 border border-[#2c1654] p-3 rounded-xl relative overflow-hidden">
                       <div className="absolute top-2 right-2 opacity-10">
                         <DollarSign className="w-8 h-8 text-mystic-gold" />
                       </div>
-                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Gross Volume</span>
+                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Stored gross aggregate</span>
                       <strong className="text-lg font-bold text-white tabular-nums">
-                        ${(financialStats?.totalGrossVolume ?? 0).toFixed(2)}
+                        {adminDataLoaded && typeof financialStats?.totalGrossVolume === "number" && Number.isFinite(financialStats.totalGrossVolume) && financialStats.totalGrossVolume >= 0
+                          ? `$${financialStats.totalGrossVolume.toFixed(2)}` : "Not available"}
                       </strong>
                     </div>
 
@@ -4209,9 +4189,10 @@ export default function App() {
                       <div className="absolute top-2 right-2 opacity-10">
                         <Shield className="w-8 h-8 text-teal-400" />
                       </div>
-                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Platform Rev (20%)</span>
+                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Stored platform aggregate</span>
                       <strong className="text-lg font-bold text-teal-400 tabular-nums">
-                        ${(financialStats?.totalPlatformRevenue ?? 0).toFixed(2)}
+                        {adminDataLoaded && typeof financialStats?.totalPlatformRevenue === "number" && Number.isFinite(financialStats.totalPlatformRevenue) && financialStats.totalPlatformRevenue >= 0
+                          ? `$${financialStats.totalPlatformRevenue.toFixed(2)}` : "Not available"}
                       </strong>
                     </div>
 
@@ -4219,9 +4200,10 @@ export default function App() {
                       <div className="absolute top-2 right-2 opacity-10">
                         <TrendingUp className="w-8 h-8 text-purple-400" />
                       </div>
-                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Broadcaster Transfers (80%)</span>
+                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Stored transfer aggregate</span>
                       <strong className="text-lg font-bold text-purple-300 tabular-nums">
-                        ${(financialStats?.totalTransfers ?? 0).toFixed(2)}
+                        {adminDataLoaded && typeof financialStats?.totalTransfers === "number" && Number.isFinite(financialStats.totalTransfers) && financialStats.totalTransfers >= 0
+                          ? `$${financialStats.totalTransfers.toFixed(2)}` : "Not available"}
                       </strong>
                     </div>
 
@@ -4229,9 +4211,11 @@ export default function App() {
                       <div className="absolute top-2 right-2 opacity-10">
                         <Gem className="w-8 h-8 text-mystic-gold" />
                       </div>
-                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Transactions</span>
+                      <span className="text-[9px] font-mono uppercase text-slate-400 block mb-1">Stored aggregate event count</span>
                       <strong className="text-lg font-bold text-mystic-gold tabular-nums">
-                        {financialStats?.purchaseCount ?? 0}
+                        {adminDataLoaded && typeof financialStats?.purchaseCount === "number" &&
+                          Number.isSafeInteger(financialStats.purchaseCount) && financialStats.purchaseCount >= 0
+                          ? financialStats.purchaseCount.toLocaleString() : "Not available"}
                       </strong>
                     </div>
                   </div>
@@ -4282,15 +4266,16 @@ export default function App() {
                   {/* Real-time Ledger */}
                   <div className="space-y-2.5">
                     <span className="text-[9px] font-mono text-slate-400 uppercase block pl-1 font-semibold">
-                      Global Reconciliation Audit Ledger
+                      Latest 50 stored financial records
                     </span>
 
-                    {financialRecords.length === 0 ? (
+                    {!adminDataLoaded ? (
                       <div className="py-8 text-center text-slate-500 border border-dashed border-[#2c1654]/40 rounded-xl italic">
-                        No financial events registered in server ledger logs yet.<br/>
-                        <span className="text-[10px] text-slate-600 block mt-1">
-                          (Initiate a gem recharge on the Member tab or tip on the Live tab to test)
-                        </span>
+                        Financial records are unavailable until the protected Admin request succeeds.
+                      </div>
+                    ) : financialRecords.length === 0 ? (
+                      <div className="py-8 text-center text-slate-500 border border-dashed border-[#2c1654]/40 rounded-xl italic">
+                        No records were returned by the bounded latest-50 query. This is not evidence of zero payments.
                       </div>
                     ) : (
                       <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
@@ -4344,7 +4329,8 @@ export default function App() {
                                 </div>
 
                                 <strong className="text-white font-mono font-bold text-sm">
-                                  ${record.amount ? Number(record.amount).toFixed(2) : "0.00"}
+                                  {typeof record.amount === "number" && Number.isFinite(record.amount) && record.amount >= 0
+                                    ? `$${record.amount.toFixed(2)}` : "Amount unavailable"}
                                 </strong>
                               </div>
 

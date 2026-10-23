@@ -2,11 +2,86 @@ import type express from "express";
 import { getAuth } from "firebase-admin/auth";
 import { FieldPath, type Firestore } from "firebase-admin/firestore";
 import { revenueRecord, REVENUE_LIMITATIONS } from "./src/lib/adminRevenue";
+import { getAuthoritativeBroadcasterRank } from "./src/lib/broadcasterRanks";
 
 type Guard = (req: express.Request, res: express.Response) => Promise<string | null>;
+type FirebaseConfiguration = { projectId: string; firestoreDatabaseId: string };
 const PRIMARY_ADMIN_EMAIL = "kertisjohnson7@gmail.com";
 
-export function registerAdminPanel(app: express.Express, db: Firestore, guard: Guard) {
+export function registerAdminPanel(app: express.Express, db: Firestore, guard: Guard, configuration?: FirebaseConfiguration) {
+  app.get("/api/admin/diagnostics", async (req, res) => {
+    if (!(await guard(req, res))) return;
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({
+      server: { status: "available", uptimeSeconds: Math.floor(process.uptime()) },
+      firestore: {
+        status: "admin-authorization-read-succeeded",
+        detail: "The protected authorization path succeeded for this request. No separate connectivity probe was run."
+      },
+      configuration: configuration ? {
+        status: "configured",
+        projectId: configuration.projectId,
+        firestoreDatabaseId: configuration.firestoreDatabaseId
+      } : { status: "unavailable", projectId: null, firestoreDatabaseId: null },
+      checksNotRun: [
+        "Firestore quota limits and billing status — verify in Google Cloud Console for the configured project and database",
+        "Stripe connectivity",
+        "email delivery"
+      ]
+    });
+  });
+
+  app.get("/api/admin/rankings", async (req, res) => {
+    if (!(await guard(req, res))) return;
+    res.setHeader("Cache-Control", "no-store");
+    const after = req.query.after;
+    if (after !== undefined && (typeof after !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(after))) {
+      return res.status(400).json({ error: "Invalid rankings cursor." });
+    }
+    let cursor: { gems: number; uid: string } | null = null;
+    if (typeof after === "string") {
+      try {
+        const decoded = Buffer.from(after, "base64url").toString("utf8");
+        const match = /^([0-9]{1,16})\|([A-Za-z0-9_-]{1,128})$/.exec(decoded);
+        if (!match || Buffer.from(decoded).toString("base64url") !== after) return res.status(400).json({ error: "Invalid rankings cursor." });
+        cursor = { gems: Number(match[1]), uid: match[2] };
+        if (!Number.isSafeInteger(cursor.gems) || cursor.gems < 1) return res.status(400).json({ error: "Invalid rankings cursor." });
+      } catch {
+        return res.status(400).json({ error: "Invalid rankings cursor." });
+      }
+    }
+    try {
+      let query = db.collection("users")
+        .where("lifetimeGemsReceived", ">", 0)
+        .orderBy("lifetimeGemsReceived", "desc")
+        .orderBy(FieldPath.documentId())
+        .limit(26);
+      if (cursor) query = query.startAfter(cursor.gems, cursor.uid);
+      const snapshot = await query.get();
+      const page = snapshot.docs.slice(0, 25);
+      const last = page[page.length - 1];
+      const lastGems = last?.data().lifetimeGemsReceived;
+      return res.json({
+        members: page.map((document) => {
+          const data = document.data();
+          const rank = getAuthoritativeBroadcasterRank(data);
+          return {
+            uid: document.id,
+            displayName: typeof data.displayName === "string" ? data.displayName : null,
+            lifetimeGemsReceived: rank?.lifetimeGemsReceived ?? null,
+            currentRank: rank?.currentRank.name ?? null
+          };
+        }),
+        nextCursor: snapshot.size > 25 && Number.isSafeInteger(lastGems) && lastGems > 0
+          ? Buffer.from(`${lastGems}|${last.id}`).toString("base64url")
+          : null
+      });
+    } catch (error) {
+      console.error("[Admin] Broadcaster ranking read failed:", error);
+      return res.status(500).json({ error: "Could not load broadcaster rankings." });
+    }
+  });
+
   app.get("/api/admin/revenue", async (req, res) => {
     if (!(await guard(req, res))) return;
     res.setHeader("Cache-Control", "no-store");
@@ -32,6 +107,7 @@ export function registerAdminPanel(app: express.Express, db: Firestore, guard: G
 
   app.get("/api/admin/panel", async (req, res) => {
     if (!(await guard(req, res))) return;
+    res.setHeader("Cache-Control", "no-store");
     try {
       const [admins, readers, memberCount, stats, records] = await Promise.all([
         db.collection("users").where("role", "==", "admin").limit(100).get(),

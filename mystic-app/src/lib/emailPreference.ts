@@ -8,6 +8,7 @@ export async function emailPreferenceRequest(choice?: { consented: boolean; onbo
   const token = await user.getIdToken();
   const response = await fetch("/api/members/me/email-consent", {
     method: choice ? "POST" : "GET",
+    cache: "no-store",
     headers: { Authorization: `Bearer ${token}`, ...(choice ? { "Content-Type": "application/json" } : {}) },
     ...(choice ? { body: JSON.stringify({ ...choice, ...(choice.onboarding ? { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION } : {}) }) } : {})
   });

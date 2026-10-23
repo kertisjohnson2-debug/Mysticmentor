@@ -33,10 +33,10 @@ export default function AdminMembers() {
     setEditing(null); setPendingAction(null); setHistoryUid(null);
     setDeletionUid(null);
     setActionError(null);
-    const nameSearch = !!query.search && query.searchBy === "displayName";
-    const params = new URLSearchParams(nameSearch ? query : query.search ? { email: query.search } : {});
-    if (cursor) params.set(nameSearch ? "after" : "pageToken", cursor);
-    adminFetch<Page>(`/api/admin/${nameSearch ? "members" : "accounts"}?${params}`).then((data) => { if (active) setPage(data); })
+    const profileSearch = ["displayName", "role", "status"].includes(query.searchBy);
+    const params = new URLSearchParams(profileSearch ? query : query.search ? { email: query.search } : {});
+    if (cursor) params.set(profileSearch ? "after" : "pageToken", cursor);
+    adminFetch<Page>(`/api/admin/${profileSearch ? "members" : "accounts"}?${params}`).then((data) => { if (active) setPage(data); })
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load members."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -73,10 +73,22 @@ export default function AdminMembers() {
   };
   return <section className="space-y-4 text-left">
     <h3 className="text-sm font-bold text-white">Members</h3>
-    <p className="text-xs text-slate-400">All Firebase accounts, up to 50 per page. Search email exactly, or use a case-sensitive name prefix to search registered profiles. Accounts without a profile are included in the full directory and email search.</p>
+    <p className="text-xs text-slate-400">All Firebase accounts, up to 50 per page. Email searches are exact. Name, role, and restriction-status filters search profile-backed accounts; Auth-only accounts remain included in the full directory and email search.</p>
     <form onSubmit={(event) => { event.preventDefault(); if (busy) return; setPendingAction(null); setEditing(null); setHistoryUid(null); setCursor(null); setPrevious([]); setQuery({ search: search.trim(), searchBy }); }} className="flex flex-wrap gap-2">
-      <label className="text-xs text-slate-300">Search by <select value={searchBy} onChange={(event) => setSearchBy(event.target.value)} className="bg-[#120a26] p-2"><option value="email">Email</option><option value="displayName">Name prefix</option></select></label>
-      <input aria-label="Member search" value={search} maxLength={searchBy === "email" ? 254 : 100} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-[#120a26] p-2 text-xs text-white" />
+      <label className="text-xs text-slate-300">Search by <select value={searchBy} onChange={(event) => { setSearchBy(event.target.value); setSearch(""); }} className="bg-[#120a26] p-2"><option value="email">Email (exact)</option><option value="displayName">Name prefix</option><option value="role">Role</option><option value="status">Restriction status</option></select></label>
+      {searchBy === "role" ? (
+        <select aria-label="Member role" value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-[#120a26] p-2 text-xs text-white">
+          <option value="">All roles</option><option value="member">Member</option><option value="admin">Admin</option>
+        </select>
+      ) : searchBy === "status" ? (
+        <select aria-label="Account restriction status" value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-[#120a26] p-2 text-xs text-white">
+          <option value="">All statuses</option><option value="suspended">Suspended</option><option value="banned">Banned</option>
+        </select>
+      ) : (
+        <input aria-label="Member search" value={search} maxLength={searchBy === "email" ? 254 : 100}
+          placeholder={searchBy === "displayName" ? "Case-sensitive prefix" : "Exact email"}
+          onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-[#120a26] p-2 text-xs text-white" />
+      )}
       <button type="submit" disabled={busy} className={buttonClass}>Search</button>
     </form>
     {error && <p role="alert" className="text-xs text-red-300">{error}</p>}

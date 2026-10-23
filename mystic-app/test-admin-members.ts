@@ -17,6 +17,8 @@ import PolicyPage from "./src/components/PolicyPage";
 import MemberRestrictionConfirmation from "./src/components/MemberRestrictionConfirmation";
 import MemberCardControls from "./src/components/MemberCardControls";
 import AdminGemMetrics from "./src/components/AdminGemMetrics";
+import AdminRankings from "./src/components/AdminRankings";
+import AdminDiagnostics from "./src/components/AdminDiagnostics";
 import { revenueRecord, REVENUE_LIMITATIONS } from "./src/lib/adminRevenue";
 import { TERMS_VERSION, PRIVACY_VERSION, POLICY_REVIEW_NOTICE } from "./src/lib/policies";
 import { reportStatusLabel, validateReportInput, REPORT_TRANSITIONS } from "./src/lib/communityReports";
@@ -136,6 +138,8 @@ try {
   check("authorized suspension succeeds", (await request("/api/admin/members/action", admin, { action: "suspend", uid: "phase2_member", enabled: true })).status === 200);
   const suspendedAccount = await (await request("/api/admin/accounts?email=member@example.test", admin)).json();
   check("suspension is persisted and returned on directory reload", suspendedAccount.members[0].suspended === true && (await db.collection("users").doc("phase2_member").get()).data()?.suspended === true);
+  const suspendedFilter = await (await request("/api/admin/members?search=suspended&searchBy=status", admin)).json();
+  check("directory restriction-status filter finds suspended profile", suspendedFilter.members.some((item: { uid: string }) => item.uid === "phase2_member"));
   check("suspended existing token cannot call legacy API", (await request("/api/legacy-probe", member)).status === 403);
   check("restricted member can observe own profile only", (await rest("users/phase2_member", member)).status === 200);
   check("restricted member cannot access authenticated Firestore data", (await rest("broadcasterStats/phase2_admin", member)).status === 403);
@@ -144,6 +148,8 @@ try {
   check("unsuspending does not remove a ban", (await request("/api/legacy-probe", member)).status === 403);
   const bannedAccount = await (await request("/api/admin/accounts?email=member@example.test", admin)).json();
   check("ban and unsuspend persist independently", bannedAccount.members[0].banned === true && bannedAccount.members[0].suspended === false);
+  const bannedFilter = await (await request("/api/admin/members?search=banned&searchBy=status", admin)).json();
+  check("directory restriction-status filter finds banned profile", bannedFilter.members.some((item: { uid: string }) => item.uid === "phase2_member"));
   check("banned existing token cannot access authenticated Firestore data", (await rest("broadcasterStats/phase2_admin", member)).status === 403);
   await request("/api/admin/members/action", admin, { action: "ban", uid: "phase2_member", enabled: false });
   check("unban restores unrestricted account access", (await request("/api/legacy-probe", member)).status === 200);
@@ -171,8 +177,14 @@ try {
   check("name-prefix query is bounded", nameSearch.members.length === 50 && nameSearch.nextCursor);
   const nameNext = await (await request(`/api/admin/members?search=Paging&searchBy=displayName&after=${nameSearch.nextCursor}`, admin)).json();
   check("name-prefix cursor traverses remaining matches", nameNext.members.length === 5);
-  const panel = await (await request("/api/admin/panel", admin)).json();
+  const adminRoleSearch = await (await request("/api/admin/members?search=admin&searchBy=role", admin)).json();
+  check("member directory can search exact profile role", adminRoleSearch.members.length === 2 &&
+    adminRoleSearch.members.every((item: { role: string }) => item.role === "admin"));
+  check("member directory rejects unsupported role filters", (await request("/api/admin/members?search=owner&searchBy=role", admin)).status === 400);
+  const panelResponse = await request("/api/admin/panel", admin);
+  const panel = await panelResponse.json();
   check("panel counts all profiles without fetching full directory", panel.memberCount === 58 && panel.members.length === 2);
+  check("protected Admin panel bundle is not cacheable", panelResponse.headers.get("cache-control") === "no-store");
   await auth.createUser({ uid: "auth_only", email: "auth-only@example.test" });
   check("ordinary member cannot read full Auth directory", (await request("/api/admin/accounts", member)).status === 403);
   check("full Auth directory requires PIN session", (await request("/api/admin/accounts", admin, undefined, false)).status === 401);
@@ -209,7 +221,9 @@ try {
   const reportNext = await (await request(`/api/admin/reports?after=${reportFirst.nextCursor}`, admin)).json();
   check("report queue is bounded and paginated", reportFirst.reports.length === 25 && reportNext.reports.length === 6);
   const source = readFileSync("server.ts", "utf8");
-  check("production wiring retains role + PIN guard", source.includes("registerMemberManagement(app, db, requireAdminSession, authenticateMember)") && source.includes("registerAdminPanel(app, db, requireAdminSession)"));
+  check("production wiring retains role + PIN guard and reports configured Firebase IDs", source.includes("registerMemberManagement(app, db, requireAdminSession, authenticateMember)") &&
+    source.includes("registerAdminPanel(app, db, requireAdminSession, {") &&
+    source.includes("projectId: firebaseConfig.projectId") && source.includes("firestoreDatabaseId: firebaseConfig.firestoreDatabaseId"));
   check("restrictions middleware registered after webhook and before member routes", source.indexOf('app.post("/api/stripe-webhook"') < source.indexOf("registerAccountRestrictions(app, db)") && source.indexOf("registerAccountRestrictions(app, db)") < source.indexOf('app.post("/api/init-profile"'));
   const ui = readFileSync("src/App.tsx", "utf8");
   const checkboxes = readFileSync("src/components/RegistrationConsent.tsx", "utf8");
@@ -726,12 +740,57 @@ try {
   const revenueAfter = await db.collection("financial_records").get();
   check("Revenue reads preserve all stored financial records", isDeepStrictEqual(revenueBefore.docs.map((doc) => doc.data()), revenueAfter.docs.map((doc) => doc.data())));
   check("Revenue offers no mutation endpoint", (await request(revenuePath, admin, { amount: 999 })).status === 404);
+  const rankingBatch = db.batch();
+  for (let index = 0; index < 28; index++) rankingBatch.set(db.collection("users").doc(`ranking_${String(index).padStart(3, "0")}`), {
+    displayName: `Rank ${index}`, role: "member", lifetimeGemsReceived: 10000 + index, gemBalance: 1000 - index
+  });
+  await rankingBatch.commit();
+  const rankingPath = "/api/admin/rankings";
+  check("rankings reject anonymous, ordinary-member, and missing-PIN requests",
+    (await request(rankingPath)).status === 401 && (await request(rankingPath, member)).status === 403 &&
+    (await request(rankingPath, admin, undefined, false)).status === 401);
+  check("rankings validate cursors", (await request(`${rankingPath}?after=bad`, admin)).status === 400);
+  const rankingResponse = await request(rankingPath, admin);
+  const rankingOne = await rankingResponse.json();
+  const rankingTwo = await (await request(`${rankingPath}?after=${encodeURIComponent(rankingOne.nextCursor)}`, admin)).json();
+  check("rankings are bounded, ordered by qualifying Gems, and paginate without duplicates",
+    rankingResponse.status === 200 && rankingOne.members.length === 25 && rankingOne.members[0].uid === "ranking_027" &&
+    rankingOne.members[0].lifetimeGemsReceived === 10027 && rankingOne.members[0].currentRank === "Oracle" &&
+    rankingTwo.members.length === 4 && !rankingTwo.members.some((item: { uid: string }) => rankingOne.members.some((first: { uid: string }) => first.uid === item.uid)));
+  check("rankings do not read spendable balance as rank progression", rankingOne.members[0].lifetimeGemsReceived !== 973);
+  check("ranking response is private and uncached", rankingResponse.headers.get("cache-control") === "no-store");
+  check("ranking endpoint offers no mutation operation", (await request(rankingPath, admin, { gems: 999 })).status === 404);
+  const diagnosticPath = "/api/admin/diagnostics";
+  check("diagnostics reject anonymous, ordinary-member, and missing-PIN requests",
+    (await request(diagnosticPath)).status === 401 && (await request(diagnosticPath, member)).status === 403 &&
+    (await request(diagnosticPath, admin, undefined, false)).status === 401);
+  const diagnosticResponse = await request(diagnosticPath, admin);
+  const diagnostics = await diagnosticResponse.json();
+  check("diagnostics report only guarded request status and explicitly unrun checks",
+    diagnosticResponse.status === 200 && diagnostics.server.status === "available" &&
+    diagnostics.firestore.status === "admin-authorization-read-succeeded" &&
+    diagnostics.checksNotRun.some((item: string) => item.includes("Google Cloud Console")) &&
+    !JSON.stringify(diagnostics).includes("secret") && diagnosticResponse.headers.get("cache-control") === "no-store");
+  const rankingMarkup = renderToStaticMarkup(createElement(AdminRankings));
+  const diagnosticMarkup = renderToStaticMarkup(createElement(AdminDiagnostics, { session: { expiresAt: 1000, remember: false } }));
+  const diagnosticsUI = readFileSync("src/components/AdminDiagnostics.tsx", "utf8");
+  check("rankings and Diagnostics replace prior placeholders with status-aware pages",
+    rankingMarkup.includes("authoritative lifetime qualifying") && diagnosticMarkup.includes("Checking protected diagnostics") &&
+    diagnosticsUI.includes("Google Cloud Console") &&
+    !readFileSync("src/App.tsx", "utf8").includes("Admin-only section placeholder"));
+  check("Admin panel data no longer polls Firestore and offers an explicit refresh",
+    !readFileSync("src/App.tsx", "utf8").includes("setInterval(() => void refresh(), 30_000)") &&
+    readFileSync("src/App.tsx", "utf8").includes("Refresh Admin data"));
+  check("member directory exposes email, name, role, and restriction-status search",
+    readFileSync("src/components/AdminMembers.tsx", "utf8").includes('<option value="role">Role</option>') &&
+    readFileSync("src/components/AdminMembers.tsx", "utf8").includes('<option value="status">Restriction status</option>'));
   const accessUI = readFileSync("src/App.tsx", "utf8");
   const accessClient = readFileSync("src/lib/adminAccess.ts", "utf8");
   check("Revenue is immediately after Diagnostics in the second navigation row", /id: "diagnostics", label: "Diagnostics" \},\s*\{ id: "revenue", label: "Revenue"/.test(accessUI) &&
     accessUI.includes('adminSubTab === "revenue" && <AdminRevenue />'));
   check("Admin fallback visibility uses server-authorized eligibility without unlocking the console", accessUI.includes('fetch("/api/admin/access/status"') &&
     accessUI.includes("(!dbUserDoc && serverAdminIdentity === currentUser.uid)") &&
+    accessUI.includes("isAuthLoading || dbUserDoc || !profileLoadFailed") &&
     accessUI.includes('activeTab === "admin" && isAdminAuthenticated && ('));
   check("Admin request handling distinguishes protected-target denial from lost authorization", accessClient.includes('result?.code === "admin-access-denied"') &&
     accessClient.includes('result?.code === "account-restricted"') && !accessClient.includes('response.status === 401 || response.status === 403'));

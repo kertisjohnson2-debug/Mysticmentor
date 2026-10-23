@@ -110,9 +110,61 @@ and backend to be released together later, under separate deployment approval.
 Focused checks: `npx tsx test-admin-access.ts`,
 `npx tsx test-community-reports.ts`, and the emulator-only
 `test-admin-members.ts` (requires loopback Auth and Firestore emulators with a
-`demo-` project). Never point the integration test at production.
+`demo-` project). `test-admin-completion.ts` covers the new Admin ranking,
+diagnostics, and role/status endpoints with a loopback Firestore emulator.
+Never point integration tests at production.
 
 ## Broadcaster ranks
+
+The Admin panel fetches its protected overview/staff/Financials bundle once per
+Admin session and after relevant staff mutations; it does not poll Firestore.
+Admins can refresh that bundle explicitly. Members and Reports use bounded,
+on-demand pages. Members supports exact email, case-sensitive name-prefix,
+profile role, and suspended/banned status searches. Auth-only accounts remain in
+the full and email-search directory; role/status filters require profile data.
+The app loads the signed-in member profile through one Firestore snapshot
+listener rather than a separate initial read plus listener. The unused
+per-session `test/connection` read was removed; it did not verify quota or
+billing availability.
+
+Broadcaster Rankings is a read-only, Admin/PIN-protected page ordered by the
+authoritative qualifying live-gift total, with 25 records per page. It reuses the
+existing rank helper and does not expose wallet totals or alter rank data.
+Diagnostics reports server availability and successful authorization reads for
+the current request and displays only the configured Firebase project and
+named Firestore database IDs; it does not perform a separate Firestore
+connectivity probe. The current configuration is project
+`gen-lang-client-0400785181` and named database
+`ai-studio-remixcityvibemys-59685044-8cc4-45dc-9868-bdaa738876af` (not
+`(default)`). These IDs are configured in `firebase-applet-config.json`, the
+Firestore target in `firebase.json`, and `.firebaserc`.
+
+Firestore quota/billing, Stripe, and email delivery are explicitly unverified.
+A successful authorization read does not guarantee that subsequent queries
+have free quota. A reported daily-read/quota error must be checked in Google
+Cloud Console against the configured project and named database, including
+usage/quota, billing status, and database status. Runtime code cannot inspect
+or change project billing/quota settings, and code-only changes do not establish
+that a quota error is fixed. This sprint does not change billing, database IDs
+or edition, security rules, or stored data.
+
+The development-only simulated Gem checkout reports success to its UI only
+after the server completes the same transaction path used by the webhook.
+Firestore/payment-processing failures return an error response instead of an
+authorization-shaped response or a success redirect. Production payments
+remain Stripe-webhook driven.
+
+Gem and cash-tip Checkout return URLs use `APP_URL` when configured. Otherwise,
+Codespaces uses its HTTPS forwarded origin for `PORT` (default 3000), before
+request Origin/Host fallbacks. A localhost or non-HTTPS `APP_URL` is rejected in
+Codespaces. For a deployed site, set `APP_URL` to its public HTTPS origin and
+restart the server; existing Stripe Sessions keep their original return URLs.
+The initial checkout destination remains Stripe's `session.url`; remote simulator
+access is not enabled. Run `npx tsx test-checkout-urls.ts` for URL regression tests.
+Live cash tips additionally reject localhost/non-HTTPS return origins even when
+Codespaces metadata is absent. `npx tsx test-live-tip-checkout.ts` exercises both
+live frontends through the actual HTTP handler with mocked Stripe/Firestore
+boundaries; it does not verify a real card payment or webhook delivery.
 
 Admin Revenue uses a bounded, read-only `financial_records` query under the
 existing Admin/PIN guard. It returns only record ID, date, type, status, currency
