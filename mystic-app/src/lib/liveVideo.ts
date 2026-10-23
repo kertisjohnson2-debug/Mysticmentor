@@ -13,7 +13,7 @@ import {
   updateDoc,
   type Unsubscribe
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { auth, db } from "../firebase";
 import { requestNotification } from "./notifications";
 
 /*
@@ -30,8 +30,9 @@ import { requestNotification } from "./notifications";
  * To move to an SFU later, only the broadcaster-side "one connection per viewer" logic changes.
  */
 
-// TURN relay goes here. Set VITE_TURN_URL (comma-separated), VITE_TURN_USERNAME and
-// VITE_TURN_CREDENTIAL when a TURN service is available; no code change needed.
+// STUN/TURN comes from the server at runtime (/api/live/ice-servers, the same TURN_URL / TURN_USERNAME /
+// TURN_CREDENTIAL used by private calls). Build-time VITE_TURN_URL (comma-separated), VITE_TURN_USERNAME and
+// VITE_TURN_CREDENTIAL remain a fallback. Without a TURN relay, devices on mobile/cellular networks usually cannot connect.
 function buildIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
   const env = import.meta.env as Record<string, string | undefined>;
@@ -42,7 +43,48 @@ function buildIceServers(): RTCIceServer[] {
   return servers;
 }
 
-const rtcConfig = (): RTCConfiguration => ({ iceServers: buildIceServers() });
+type IceConfig = { iceServers: RTCIceServer[]; turnConfigured: boolean };
+let cachedIceConfig: IceConfig | null = null;
+
+async function loadIceConfig(): Promise<IceConfig> {
+  if (cachedIceConfig) return cachedIceConfig;
+  const fallback = buildIceServers();
+  const fallbackConfig = { iceServers: fallback, turnConfigured: fallback.length > 1 };
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error("not signed in");
+    const response = await fetch("/api/live/ice-servers", { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json() as Partial<IceConfig>;
+    if (!Array.isArray(data.iceServers) || !data.iceServers.length) throw new Error("empty ICE server list");
+    cachedIceConfig = data.turnConfigured || !fallbackConfig.turnConfigured ? { iceServers: data.iceServers, turnConfigured: Boolean(data.turnConfigured) } : fallbackConfig;
+  } catch (err) {
+    console.warn("[LiveVideo] Could not load ICE servers from the server; using built-in config:", err instanceof Error ? err.message : err);
+    return fallbackConfig;
+  }
+  if (!cachedIceConfig.turnConfigured) console.warn("[LiveVideo] No TURN relay configured; video may fail between devices on mobile or restrictive networks.");
+  return cachedIceConfig;
+}
+
+// Logs connection health without SDP, candidate addresses, or credentials.
+function watchPeer(pc: RTCPeerConnection, role: Candidate["from"], turnConfigured: boolean) {
+  const localTypes: Record<string, number> = {};
+  pc.addEventListener("icecandidate", (event) => {
+    if (event.candidate) localTypes[event.candidate.type ?? "unknown"] = (localTypes[event.candidate.type ?? "unknown"] ?? 0) + 1;
+  });
+  pc.addEventListener("icecandidateerror", (event) => {
+    const { errorCode } = event as RTCPeerConnectionIceErrorEvent;
+    if (errorCode !== 701) console.warn(`[LiveVideo] ${role} ICE server error`, { errorCode });
+  });
+  pc.addEventListener("iceconnectionstatechange", () => {
+    if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+      console.warn(`[LiveVideo] ${role} ICE ${pc.iceConnectionState}`, { turnConfigured, localCandidateTypes: { ...localTypes } });
+    }
+  });
+  pc.addEventListener("connectionstatechange", () => {
+    if (pc.connectionState === "failed") console.warn(`[LiveVideo] ${role} peer connection failed`, { iceState: pc.iceConnectionState, turnConfigured });
+  });
+}
 
 const randomId = () => (crypto.randomUUID?.() ?? `${Date.now()}${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9_-]/g, "");
 
@@ -66,12 +108,25 @@ async function clearViewers(sessionId: string) {
   }));
 }
 
-function sendCandidates(pc: RTCPeerConnection, sessionId: string, viewerId: string, from: Candidate["from"]) {
+function sendCandidates(pc: RTCPeerConnection, sessionId: string, viewerId: string, from: Candidate["from"], ready = true) {
+  const pending: Candidate[] = [];
+  const send = (payload: Candidate) => {
+    addDoc(candidatesRef(sessionId, viewerId), payload).catch((err) => console.warn(`[LiveVideo] ${from} ICE candidate not sent:`, err?.code ?? "unknown"));
+  };
   pc.onicecandidate = (event) => {
     if (!event.candidate) return;
     const payload: Candidate = { from, candidate: event.candidate.toJSON() };
-    addDoc(candidatesRef(sessionId, viewerId), payload).catch(() => undefined);
+    if (ready) send(payload);
+    else pending.push(payload);
   };
+  return () => {
+    ready = true;
+    pending.splice(0).forEach(send);
+  };
+}
+
+function addRemoteCandidate(pc: RTCPeerConnection, candidate: RTCIceCandidateInit, role: Candidate["from"]) {
+  pc.addIceCandidate(candidate).catch((err) => console.warn(`[LiveVideo] ${role} could not add remote ICE candidate:`, err?.name ?? err));
 }
 
 /** Broadcaster: captures camera/mic, publishes the session, and answers each viewer's offer. */
@@ -113,26 +168,32 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
       setViewerConnections(peers.size);
     };
 
-    const answerViewer = async (media: MediaStream, viewerId: string, offer: RTCSessionDescriptionInit) => {
+    const answerViewer = async (media: MediaStream, ice: IceConfig, viewerId: string, offer: RTCSessionDescriptionInit) => {
       if (peers.has(viewerId)) return;
-      const pc = new RTCPeerConnection(rtcConfig());
+      const pc = new RTCPeerConnection({ iceServers: ice.iceServers });
       const peer: { pc: RTCPeerConnection; unsubscribe?: Unsubscribe } = { pc };
       peers.set(viewerId, peer);
-      media.getTracks().forEach((track) => pc.addTrack(track, media));
+      watchPeer(pc, "broadcaster", ice.turnConfigured);
+      const liveTracks = media.getTracks().filter((track) => track.readyState === "live");
+      if (!liveTracks.some((track) => track.kind === "video")) console.warn("[LiveVideo] broadcaster has no live camera track to send");
+      liveTracks.forEach((track) => pc.addTrack(track, media));
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "connected") setViewerConnections(Array.from(peers.values()).filter((item) => item.pc.connectionState === "connected").length);
         if (pc.connectionState === "failed" || pc.connectionState === "closed") closePeer(viewerId);
       };
       sendCandidates(pc, sessionId, viewerId, "broadcaster");
       await pc.setRemoteDescription(offer);
+      if (cancelled || peers.get(viewerId) !== peer) return;
       await pc.setLocalDescription(await pc.createAnswer());
+      if (cancelled || peers.get(viewerId) !== peer) return;
       await updateDoc(doc(viewersRef(sessionId), viewerId), { answer: { type: "answer", sdp: pc.localDescription?.sdp ?? "" } });
+      if (cancelled || peers.get(viewerId) !== peer) return;
       peer.unsubscribe = onSnapshot(candidatesRef(sessionId, viewerId), (snapshot) => {
         snapshot.docChanges().forEach((change) => {
           const data = change.doc.data() as Candidate;
-          if (change.type === "added" && data.from === "viewer") pc.addIceCandidate(data.candidate).catch(() => undefined);
+          if (change.type === "added" && data.from === "viewer") addRemoteCandidate(pc, data.candidate, "broadcaster");
         });
-      });
+      }, (err) => console.warn("[LiveVideo] broadcaster ICE candidate listener failed:", err.code));
     };
 
     // Unmount cleanup never runs when the tab is closed, which used to leave sessions marked "live" forever.
@@ -153,6 +214,7 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
       } catch (err) {
         if (cancelled) return;
         const name = err instanceof DOMException ? err.name : "";
+        console.warn("[LiveVideo] Camera/microphone unavailable:", name || "UnknownError");
         setStatus("error");
         setError(name === "NotAllowedError"
           ? "Camera and microphone access was blocked. Allow access in your browser to share video."
@@ -164,8 +226,13 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
         return;
       }
       if (cancelled) { media.getTracks().forEach((track) => track.stop()); return; }
+      if (!media.getVideoTracks().length) console.warn("[LiveVideo] Camera returned no video track");
+      if (!media.getAudioTracks().length) console.warn("[LiveVideo] Microphone returned no audio track");
+      media.getTracks().forEach((track) => track.addEventListener("ended", () => console.warn(`[LiveVideo] broadcaster ${track.kind} track ended`)));
       streamRef.current = media;
       setStream(media);
+      const ice = await loadIceConfig();
+      if (cancelled) return;
 
       try {
         await setDoc(sessionRef(sessionId), { ownerUid: broadcasterUid, sessionId, status: "live", startedAt: Date.now(), updatedAt: Date.now(), ...metaRef.current });
@@ -183,7 +250,7 @@ export function useLiveBroadcast(broadcasterUid: string | null, enabled: boolean
             const data = change.doc.data();
             if (change.type === "removed") closePeer(change.doc.id);
             else if (data.sessionId === sessionId && data.offer && !data.answer) {
-              answerViewer(media, change.doc.id, data.offer as RTCSessionDescriptionInit).catch((err) => { console.error("Live viewer connection failed:", err); closePeer(change.doc.id); });
+              answerViewer(media, ice, change.doc.id, data.offer as RTCSessionDescriptionInit).catch((err) => { console.error("Live viewer connection failed:", err); closePeer(change.doc.id); });
             }
           });
         }, (err) => { console.error("Live signaling failed:", err); setStatus("error"); setError("Live video signaling failed."); });
@@ -252,42 +319,62 @@ export function useLiveViewer(broadcasterUid: string | null, viewerUid: string |
     let cancelled = false;
     const viewerId = randomId();
     const viewerDoc = doc(viewersRef(sessionId), viewerId);
-    const pc = new RTCPeerConnection(rtcConfig());
     const remote = new MediaStream();
+    let pc: RTCPeerConnection | null = null;
     let unsubscribeAnswer: Unsubscribe | undefined;
     let unsubscribeCandidates: Unsubscribe | undefined;
 
     setStatus("connecting");
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
-    pc.ontrack = (event) => {
-      remote.addTrack(event.track);
-      setStream(new MediaStream(remote.getTracks()));
-    };
-    pc.onconnectionstatechange = () => {
-      if (cancelled) return;
-      if (pc.connectionState === "connected") setStatus("connected");
-      else if (pc.connectionState === "failed") setStatus("error");
-    };
-    sendCandidates(pc, sessionId, viewerId, "viewer");
-
     (async () => {
       try {
-        await pc.setLocalDescription(await pc.createOffer());
-        await setDoc(viewerDoc, { viewerUid, sessionId, createdAt: Date.now(), offer: { type: "offer", sdp: pc.localDescription?.sdp ?? "" } });
+        const ice = await loadIceConfig();
+        if (cancelled) return;
+        const peer = new RTCPeerConnection({ iceServers: ice.iceServers });
+        pc = peer;
+        watchPeer(peer, "viewer", ice.turnConfigured);
+        peer.addTransceiver("video", { direction: "recvonly" });
+        peer.addTransceiver("audio", { direction: "recvonly" });
+        peer.ontrack = (event) => {
+          if (cancelled) return;
+          remote.addTrack(event.track);
+          console.info("[LiveVideo] viewer remote track received", { kind: event.track.kind, muted: event.track.muted });
+          setStream(remote);
+        };
+        peer.onconnectionstatechange = () => {
+          if (cancelled) return;
+          if (peer.connectionState === "connected") {
+            setStatus("connected");
+            if (!remote.getVideoTracks().length) console.warn("[LiveVideo] viewer connected but received no video track");
+          } else if (peer.connectionState === "failed") setStatus("error");
+        };
+        // Candidate permissions depend on viewerUid in the parent document, which must be committed first.
+        const flushCandidates = sendCandidates(peer, sessionId, viewerId, "viewer", false);
+
+        await peer.setLocalDescription(await peer.createOffer());
+        if (cancelled) return;
+        await setDoc(viewerDoc, { viewerUid, sessionId, createdAt: Date.now(), offer: { type: "offer", sdp: peer.localDescription?.sdp ?? "" } });
+        if (cancelled) { await deleteDoc(viewerDoc); return; }
+        flushCandidates();
         let answered = false;
         unsubscribeAnswer = onSnapshot(viewerDoc, (snapshot) => {
           const answer = snapshot.data()?.answer as RTCSessionDescriptionInit | undefined;
           if (!answer || answered || cancelled) return;
           answered = true;
-          pc.setRemoteDescription(answer).then(() => {
+          peer.setRemoteDescription(answer).then(() => {
+            if (cancelled) return;
             unsubscribeCandidates = onSnapshot(candidatesRef(sessionId, viewerId), (candidates) => {
               candidates.docChanges().forEach((change) => {
                 const data = change.doc.data() as Candidate;
-                if (change.type === "added" && data.from === "broadcaster") pc.addIceCandidate(data.candidate).catch(() => undefined);
+                if (change.type === "added" && data.from === "broadcaster") addRemoteCandidate(peer, data.candidate, "viewer");
               });
-            });
-          }).catch(() => setStatus("error"));
+            }, (err) => console.warn("[LiveVideo] viewer ICE candidate listener failed:", err.code));
+          }).catch((err) => {
+            console.warn("[LiveVideo] viewer could not apply broadcaster answer:", err?.name ?? err);
+            if (!cancelled) setStatus("error");
+          });
+        }, (err) => {
+          console.warn("[LiveVideo] viewer answer listener failed:", err.code);
+          if (!cancelled) setStatus("error");
         });
       } catch (err) {
         console.error("Failed to join live session:", err);
@@ -299,8 +386,9 @@ export function useLiveViewer(broadcasterUid: string | null, viewerUid: string |
       cancelled = true;
       unsubscribeAnswer?.();
       unsubscribeCandidates?.();
-      pc.onicecandidate = null;
-      pc.close();
+      if (pc) { pc.onicecandidate = null; pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); }
+      remote.getTracks().forEach((track) => track.stop());
+      setStream(null);
       getDocs(candidatesRef(sessionId, viewerId))
         .then((items) => Promise.all(items.docs.map((item) => deleteDoc(item.ref))))
         .catch(() => undefined)

@@ -14,6 +14,8 @@
    - `TURN_USERNAME`
    - `TURN_CREDENTIAL`
    Use a TURN provider (for example coturn, Twilio or Cloudflare). The credentials are sent only to authorized participants after join. Short-lived credentials would be preferable to static ones.
+   Live broadcasts use the same server variables via `GET /api/live/ice-servers` (any signed-in user, including anonymous Live guests); no client rebuild is needed.
+   Live viewer ICE candidates are buffered until the offer document is committed, because candidate-write rules require that document. Run `npx tsx test-live-video.mts` for offline signaling-order, stable remote-stream attachment, playback-error handling, and leave-during-join regression checks; these do not verify device connectivity or TURN. `[LiveVideo]` logs distinguish remote-track receipt, playback start/rejection, signaling errors, and ICE failures without printing credentials or candidates. Track receipt alone does not prove that video frames arrived.
 4. **Stripe (needed for paid appointments only; free ones do not use it)**:
    - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_URL` (public https URL).
    - In the Stripe Dashboard add the endpoint `https://<APP_URL>/api/stripe-webhook` for `checkout.session.completed`.

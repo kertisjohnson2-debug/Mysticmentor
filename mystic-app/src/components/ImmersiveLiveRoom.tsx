@@ -255,12 +255,26 @@ export default function ImmersiveLiveRoom({
     video.srcObject = videoStream;
     setIsAudioBlocked(false);
     if (!videoStream) return;
-    video.play().catch(() => {
+    let cancelled = false;
+    const onPlaying = () => console.info("[LiveVideo] video playback started", { width: video.videoWidth, height: video.videoHeight });
+    video.addEventListener("playing", onPlaying);
+    video.play().catch((error: unknown) => {
+      if (cancelled) return;
+      const name = error instanceof Error ? error.name : "UnknownError";
+      console.warn("[LiveVideo] video playback rejected", { name });
       // Autoplay with sound can be blocked; fall back to muted playback until the viewer taps
+      if (name !== "NotAllowedError") return;
       video.muted = true;
       setIsAudioBlocked(true);
-      video.play().catch(() => undefined);
+      video.play().catch((retryError: unknown) => {
+        if (!cancelled) console.warn("[LiveVideo] muted video playback failed", { name: retryError instanceof Error ? retryError.name : "UnknownError" });
+      });
     });
+    return () => {
+      cancelled = true;
+      video.removeEventListener("playing", onPlaying);
+      video.srcObject = null;
+    };
   }, [videoStream, hasRealVideo]);
 
   const spreadSize = readingSpread === "single" ? 1 : 3;

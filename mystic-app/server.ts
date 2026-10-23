@@ -2774,6 +2774,22 @@ async function startServer() {
     return servers;
   };
 
+  // Live broadcasts use the same runtime STUN/TURN config as private calls. Signed-in viewers, including anonymous
+  // Live guests, need the relay too, so anonymous tokens are accepted here.
+  app.get("/api/live/ice-servers", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ") || authHeader.length <= 7) return res.status(401).json({ error: "Missing or invalid authorization header" });
+    try {
+      const { uid } = await getAuth().verifyIdToken(authHeader.substring(7));
+      if (isRateLimited(uid)) return res.status(429).json({ error: "Too many requests" });
+    } catch {
+      return res.status(401).json({ error: "Invalid ID token" });
+    }
+    const iceServers = callIceServers();
+    res.set("Cache-Control", "no-store");
+    return res.json({ iceServers, turnConfigured: iceServers.length > 1 });
+  });
+
   const authorizeCall = async (req: express.Request, res: express.Response) => {
     const uid = await authenticateMember(req, res, false);
     if (!uid) return null;
